@@ -1,0 +1,12 @@
+# GraphQL endpoint paths
+graphql
+graphiql
+altair
+playground
+api/graphql
+v1/graphql
+v2/graphql
+__graphql
+graphql/console
+graphql/schema
+graphql/explorer

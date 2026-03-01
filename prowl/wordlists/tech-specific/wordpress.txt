@@ -1,0 +1,18 @@
+# WordPress paths
+wp-admin
+wp-login.php
+wp-config.php
+wp-content
+wp-includes
+wp-json
+wp-json/wp/v2/users
+wp-json/wp/v2/posts
+wp-json/wp/v2/pages
+xmlrpc.php
+wp-cron.php
+readme.html
+license.txt
+wp-content/debug.log
+wp-content/uploads
+wp-content/plugins
+wp-content/themes

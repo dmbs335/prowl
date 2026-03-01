@@ -1,0 +1,17 @@
+# Swagger / OpenAPI documentation paths
+swagger.json
+swagger.yaml
+swagger-ui.html
+swagger-resources
+api-docs
+api-docs.json
+openapi.json
+openapi.yaml
+v2/api-docs
+v3/api-docs
+.well-known/openapi.json
+docs
+api/docs
+api/swagger
+api/openapi
+redoc

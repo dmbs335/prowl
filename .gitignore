@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Crawl outputs (generated data)
+prowl-output/
+crawl_*/
+test_output/
+test_e2e/
+test_fix/
+test_profile/
+test_profile2/
+prowl-full-test/
+prowl-st-test/
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Dashboard UI dependencies
+dashboard-ui/node_modules/
+dashboard-ui/dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
