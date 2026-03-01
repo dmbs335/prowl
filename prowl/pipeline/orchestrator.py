@@ -1,4 +1,4 @@
-"""Pipeline orchestrator — runs phases in dependency order."""
+"""Pipeline orchestrator -- runs phases in dependency order."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ class PipelineOrchestrator:
             # Check if all dependencies are satisfied
             if not all(dep in completed_phases for dep in phase.depends_on):
                 # Should not happen with correct ordering, but handle gracefully
-                logger.warning("Skipping phase %s — deps not met", phase.name)
+                logger.warning("Skipping phase %s -- deps not met", phase.name)
                 phase.state = PhaseState.SKIPPED
                 continue
 
@@ -162,7 +162,7 @@ class PipelineOrchestrator:
                 exploration=self._phase_exploration[phase.name],
             )
             logger.info(
-                "Phase '%s' completed in %.1fs — coverage +%d (%d total), "
+                "Phase '%s' completed in %.1fs -- coverage +%d (%d total), "
                 "discovery_rate=%.2f, insights +%d, templates +%d",
                 phase.name, elapsed, new_coverage, coverage_after,
                 discovery_rate, new_insights, new_templates,

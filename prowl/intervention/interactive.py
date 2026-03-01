@@ -98,7 +98,7 @@ class InteractiveSession:
     def _list_interventions(self) -> None:
         for i in self._manager.get_all():
             status = "PENDING" if i["state"] == "pending" else i["state"].upper()
-            print(f"  [{i['id']}] {status} — {i['kind']}: {i['message']}")
+            print(f"  [{i['id']}] {status} -- {i['kind']}: {i['message']}")
 
     async def _resolve_intervention(self, intervention_id: str) -> None:
         if not intervention_id:

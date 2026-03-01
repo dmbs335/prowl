@@ -237,6 +237,7 @@ class StateTransitionModule(BaseModule):
                 )
 
                 try:
+                    await self.engine.rate_limiter.wait()
                     response = await self.engine.execute(request)
                     self.requests_made += 1
 
@@ -367,6 +368,7 @@ class StateTransitionModule(BaseModule):
             )
 
             try:
+                await self.engine.rate_limiter.wait()
                 response = await self.engine.execute(request)
                 self.requests_made += 1
 
@@ -492,7 +494,7 @@ class StateTransitionModule(BaseModule):
         self.state_graph.record_flow(flow)
 
         if has_side_effects:
-            self.logger.info("Flow [%s] has side effects — marked as unsafe", name)
+            self.logger.info("Flow [%s] has side effects -- marked as unsafe", name)
 
     @staticmethod
     def _infer_flow_name(urls: list[str]) -> str:
