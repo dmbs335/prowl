@@ -86,6 +86,7 @@ class CrawlConfig(BaseSettings):
     saturation_threshold: float = 0.02
     saturation_window: int = 200
     smart_form_submission: bool = True
+    adaptive_rate_limit: bool = True
 
     # Infrastructure mapping
     infra_mapping_enabled: bool = True

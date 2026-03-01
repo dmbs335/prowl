@@ -84,6 +84,7 @@ class DirBruteforceModule(BaseModule):
                 priority=5,
             )
 
+            await self.engine.rate_limiter.wait()
             response = await self.engine.execute(request)
             self.requests_made += 1
 

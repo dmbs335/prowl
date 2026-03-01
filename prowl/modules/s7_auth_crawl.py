@@ -92,6 +92,7 @@ class AuthCrawlModule(BaseModule):
                 auth_role=role_name,
                 priority=7,
             )
+            await self.engine.rate_limiter.wait()
             response = await self.engine.execute(request)
             self.requests_made += 1
 

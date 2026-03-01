@@ -1,4 +1,4 @@
-"""CrawlEngine — main orchestrator that ties everything together."""
+"""CrawlEngine -- main orchestrator that ties everything together."""
 
 from __future__ import annotations
 
@@ -10,6 +10,97 @@ from enum import auto
 from prowl._compat import StrEnum
 from pathlib import Path
 from typing import Any
+
+
+# ---------------------------------------------------------------------------
+# Adaptive Rate Limiter (TCP AIMD-inspired)
+# ---------------------------------------------------------------------------
+
+class AdaptiveRateLimiter:
+    """Leaky-bucket rate limiter for constant server rate limits.
+
+    Server rate limits are a fixed wall, not variable like network
+    congestion.  No need for TCP's exponential phases -- simple
+    additive adjustments converge fast and stay stable.
+
+    429 hit:  delay += backoff_step   (slow down a little)
+    N OK:     delay -= recover_step   (speed up a little)
+
+    Converges to just below the server limit with minimal oscillation.
+    Leaky bucket ensures global inter-request pacing across all workers.
+    """
+
+    def __init__(
+        self,
+        initial_delay: float = 0.1,
+        min_delay: float = 0.01,
+        max_delay: float = 10.0,
+        backoff_step: float = 0.05,
+        recover_step: float = 0.01,
+        success_window: int = 10,
+    ) -> None:
+        self._delay = initial_delay
+        self._min_delay = min_delay
+        self._max_delay = max_delay
+        self._backoff_step = backoff_step
+        self._recover_step = recover_step
+        self._success_window = success_window
+        self._consecutive_ok: int = 0
+        self._total_backoffs: int = 0
+        self._lock = asyncio.Lock()
+        # Leaky bucket: track last request time for global pacing
+        self._pace_lock = asyncio.Lock()
+        self._last_request_time: float = 0.0
+
+    @property
+    def current_delay(self) -> float:
+        return self._delay
+
+    @property
+    def total_backoffs(self) -> int:
+        return self._total_backoffs
+
+    async def wait(self) -> None:
+        """Leaky bucket: ensure minimum gap between any two requests globally."""
+        async with self._pace_lock:
+            now = time.time()
+            elapsed = now - self._last_request_time
+            if elapsed < self._delay:
+                await asyncio.sleep(self._delay - elapsed)
+            self._last_request_time = time.time()
+
+    async def on_success(self) -> None:
+        """N consecutive OK -> speed up a little."""
+        async with self._lock:
+            self._consecutive_ok += 1
+            if self._consecutive_ok >= self._success_window:
+                old = self._delay
+                self._delay = max(self._min_delay, self._delay - self._recover_step)
+                self._consecutive_ok = 0
+                if old != self._delay:
+                    logging.getLogger(__name__).debug(
+                        "Rate limiter: %.3fs -> %.3fs (-%.3f)",
+                        old, self._delay, self._recover_step,
+                    )
+
+    async def on_rate_limited(self) -> None:
+        """429 hit -> slow down a little."""
+        async with self._lock:
+            old = self._delay
+            self._delay = min(self._max_delay, self._delay + self._backoff_step)
+            self._consecutive_ok = 0
+            self._total_backoffs += 1
+            logging.getLogger(__name__).info(
+                "Rate limiter: 429 %.3fs -> %.3fs (+%.3f, #%d)",
+                old, self._delay, self._backoff_step, self._total_backoffs,
+            )
+
+    def get_stats(self) -> dict[str, Any]:
+        return {
+            "current_delay": round(self._delay, 4),
+            "total_backoffs": self._total_backoffs,
+            "consecutive_ok": self._consecutive_ok,
+        }
 
 from prowl.core.config import CrawlConfig
 from prowl.core.dedup import DeduplicationManager
@@ -71,6 +162,13 @@ class CrawlEngine:
         self.scheduler = SeedScheduler()
         self.hindsight = HindsightFeedback()
         self.template_inferrer = URLTemplateInferrer(scheduler=self.scheduler)
+
+        # Adaptive rate limiter (TCP AIMD-style)
+        self.rate_limiter = AdaptiveRateLimiter(
+            initial_delay=config.request_delay or 0.1,
+            min_delay=0.01,
+            max_delay=10.0,
+        )
 
         # Stats
         self.start_time: float = 0.0
@@ -217,6 +315,12 @@ class CrawlEngine:
                 headers=response.headers,
             )
 
+        # Adaptive rate limiting: back off on 429, speed up on success
+        if response.status_code == 429:
+            await self.rate_limiter.on_rate_limited()
+        elif response.status_code > 0:
+            await self.rate_limiter.on_success()
+
         if response.is_success:
             self.requests_completed += 1
         else:
@@ -262,8 +366,8 @@ class CrawlEngine:
                 if self.requests_completed + self.requests_failed >= self.config.max_requests:
                     break
 
-                if self.config.request_delay > 0:
-                    await asyncio.sleep(self.config.request_delay)
+                # Adaptive rate limiting (replaces static request_delay)
+                await self.rate_limiter.wait()
 
                 await self.execute(request)
             except Exception:
@@ -329,4 +433,5 @@ class CrawlEngine:
             "transactions_stored": self.transaction_store.total_stored,
             "coverage": self.coverage.get_stats(),
             "hindsight": self.hindsight.get_stats(),
+            "rate_limiter": self.rate_limiter.get_stats(),
         }

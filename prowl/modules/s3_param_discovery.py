@@ -223,6 +223,7 @@ class ParamDiscoveryModule(BaseModule):
             else:
                 return
 
+            await self.engine.rate_limiter.wait()
             response = await self.engine.execute(request)
             self.requests_made += 1
 
@@ -288,6 +289,7 @@ class ParamDiscoveryModule(BaseModule):
                         source_module=self.name,
                         depth=endpoint.depth,
                     )
+                    await self.engine.rate_limiter.wait()
                     response = await self.engine.execute(request)
                     self.requests_made += 1
 
@@ -374,6 +376,7 @@ class ParamDiscoveryModule(BaseModule):
                         source_module=self.name,
                         depth=endpoint.depth,
                     )
+                    await self.engine.rate_limiter.wait()
                     response = await self.engine.execute(request)
                     self.requests_made += 1
 
@@ -408,6 +411,7 @@ class ParamDiscoveryModule(BaseModule):
                 url=url, method=HttpMethod.GET, source_module=self.name,
             )
             t0 = time.monotonic()
+            await self.engine.rate_limiter.wait()
             response = await self.engine.execute(request)
             elapsed = (time.monotonic() - t0) * 1000
             self.requests_made += 1
