@@ -7,7 +7,8 @@ from typing import Any
 from urllib.parse import urljoin
 
 import httpx
-from bs4 import BeautifulSoup
+from lxml import etree
+from lxml.html import fromstring as html_fromstring
 
 from prowl.models.request import (
     CrawlRequest,
@@ -19,6 +20,14 @@ from prowl.models.request import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Maximum body size to parse for link/form extraction (512 KB).
+# Larger pages are truncated before parsing -- the tail rarely contains
+# navigational links and full parsing is the #1 CPU bottleneck.
+_MAX_PARSE_BYTES = 512 * 1024
+
+# Status codes that indicate error pages not worth parsing for navigation links.
+_SKIP_PARSE_STATUSES = frozenset({404, 410, 429, 500, 502, 503, 504})
 
 
 class HttpBackend:
@@ -73,13 +82,18 @@ class HttpBackend:
             content_type = response.headers.get("content-type", "")
             final_url = str(response.url)
 
-            # Parse HTML for links, forms, JS
+            # Parse HTML for links, forms, JS -- but skip error pages and
+            # non-HTML responses to avoid wasting CPU on BeautifulSoup.
             links: list[LinkData] = []
             forms: list[FormData] = []
             js_files: list[str] = []
 
-            if "html" in content_type:
-                links, forms, js_files = self._parse_html(body, final_url)
+            if (
+                "html" in content_type
+                and response.status_code not in _SKIP_PARSE_STATUSES
+            ):
+                parse_body = body[:_MAX_PARSE_BYTES] if len(body) > _MAX_PARSE_BYTES else body
+                links, forms, js_files = self._parse_html(parse_body, final_url)
 
             return CrawlResponse(
                 request=request,
@@ -107,38 +121,37 @@ class HttpBackend:
     def _parse_html(
         self, body: bytes, base_url: str
     ) -> tuple[list[LinkData], list[FormData], list[str]]:
-        """Extract links, forms, and JS files from HTML."""
+        """Extract links, forms, and JS files from HTML using lxml."""
         try:
-            soup = BeautifulSoup(body, "html.parser")
+            doc = html_fromstring(body)
+            doc.make_links_absolute(base_url, resolve_base_href=True)
         except Exception:
             return [], [], []
 
-        links = self._extract_links(soup, base_url)
-        forms = self._extract_forms(soup, base_url)
-        js_files = self._extract_js(soup, base_url)
+        links = self._extract_links(doc)
+        forms = self._extract_forms(doc, base_url)
+        js_files = self._extract_js(doc)
 
         return links, forms, js_files
 
-    def _extract_links(self, soup: BeautifulSoup, base_url: str) -> list[LinkData]:
+    def _extract_links(self, doc: etree._Element) -> list[LinkData]:
         links: list[LinkData] = []
-        for tag in soup.find_all(["a", "link", "area"]):
-            href = tag.get("href")
+        for tag in doc.xpath("//a[@href] | //link[@href] | //area[@href]"):
+            href = tag.get("href", "")
             if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
                 continue
-            url = urljoin(base_url, href)
+            text = (tag.text_content() or "")[:100].strip()
             links.append(
-                LinkData(
-                    url=url,
-                    text=tag.get_text(strip=True)[:100],
-                    tag=tag.name,
-                )
+                LinkData(url=href, text=text, tag=tag.tag)
             )
         return links
 
-    def _extract_forms(self, soup: BeautifulSoup, base_url: str) -> list[FormData]:
+    def _extract_forms(self, doc: etree._Element, base_url: str) -> list[FormData]:
         forms: list[FormData] = []
-        for form in soup.find_all("form"):
-            action = urljoin(base_url, form.get("action", ""))
+        for form in doc.xpath("//form"):
+            action = form.get("action", "")
+            if not action:
+                action = base_url
             method_str = form.get("method", "GET").upper()
             try:
                 method = HttpMethod(method_str.lower())
@@ -146,8 +159,10 @@ class HttpBackend:
                 method = HttpMethod.GET
 
             fields: list[FormField] = []
-            for inp in form.find_all(["input", "textarea", "select"]):
-                name = inp.get("name")
+            for inp in form.xpath(
+                ".//input[@name] | .//textarea[@name] | .//select[@name]"
+            ):
+                name = inp.get("name", "")
                 if not name:
                     continue
                 fields.append(
@@ -155,7 +170,7 @@ class HttpBackend:
                         name=name,
                         field_type=inp.get("type", "text"),
                         value=inp.get("value", ""),
-                        required=inp.has_attr("required"),
+                        required=inp.get("required") is not None,
                     )
                 )
 
@@ -169,9 +184,10 @@ class HttpBackend:
             )
         return forms
 
-    def _extract_js(self, soup: BeautifulSoup, base_url: str) -> list[str]:
+    def _extract_js(self, doc: etree._Element) -> list[str]:
         js_files: list[str] = []
-        for script in soup.find_all("script", src=True):
-            src = script["src"]
-            js_files.append(urljoin(base_url, src))
+        for script in doc.xpath("//script[@src]"):
+            src = script.get("src", "")
+            if src:
+                js_files.append(src)
         return js_files
