@@ -1,4 +1,4 @@
-"""Report Generator — produces the final attack surface report in JSON
+"""Report Generator - produces the final attack surface report in JSON
 and Markdown formats.
 
 Collects all findings from AttackSurfaceStore, module stats from the
@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from prowl.core.signals import Signal
 from prowl.models.report import ModuleReport
 from prowl.modules.base import BaseModule
 
@@ -31,6 +32,7 @@ class ReportGeneratorModule(BaseModule):
 
     async def run(self, **kwargs: Any) -> None:
         self._running = True
+        await self.engine.signals.emit(Signal.MODULE_STARTED, module=self.name)
         self.logger.info("Generating attack surface report")
 
         # Collect module stats from orchestrator (passed via kwargs or engine)
@@ -78,8 +80,11 @@ class ReportGeneratorModule(BaseModule):
 
         self.endpoints_found = report.risk_summary.total_endpoints
         self._running = False
+        await self.engine.signals.emit(
+            Signal.MODULE_COMPLETED, module=self.name, stats=self.get_stats()
+        )
         self.logger.info(
-            "Report complete — risk score: %.0f/100, %d endpoints, "
+            "Report complete - risk score: %.0f/100, %d endpoints, "
             "%d input vectors, %d auth boundaries, %d secrets",
             report.risk_summary.score,
             report.risk_summary.total_endpoints,
@@ -100,7 +105,7 @@ class ReportGeneratorModule(BaseModule):
         a(f"**Total HTTP transactions:** {txn_count}")
         a("")
 
-        # Risk summary — split active vs passive counts
+        # Risk summary - split active vs passive counts
         rs = report.risk_summary
         passive_tags = {"wayback", "commoncrawl", "otx"}
         active_count = sum(

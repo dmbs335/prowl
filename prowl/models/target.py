@@ -1,4 +1,4 @@
-"""Discovery target models — endpoints, parameters, secrets, attack surface."""
+"""Discovery target models - endpoints, parameters, secrets, attack surface."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class Parameter(BaseModel):
 
 
 class InputVector(BaseModel):
-    """An input point that accepts user data — the atomic unit of attack surface."""
+    """An input point that accepts user data - the atomic unit of attack surface."""
 
     endpoint_url: str
     name: str

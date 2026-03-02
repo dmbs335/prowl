@@ -6,12 +6,15 @@ import asyncio
 import importlib.resources
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from prowl.core.signals import Signal
 from prowl.models.request import CrawlRequest
 from prowl.models.target import Endpoint
 from prowl.modules.base import BaseModule
+
+# Backup file suffixes to append to discovered files
+_BACKUP_SUFFIXES = [".bak", ".old", ".orig", ".save", ".swp", "~", ".backup", ".copy"]
 
 # Default wordlist (bundled)
 DEFAULT_DIRS = [
@@ -63,6 +66,10 @@ class DirBruteforceModule(BaseModule):
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
+            # Phase 2: Backup file detection on discovered files
+            if self._running:
+                await self._probe_backup_files(target, sem)
+
         finally:
             self._running = False
             await self.engine.signals.emit(
@@ -84,8 +91,16 @@ class DirBruteforceModule(BaseModule):
                 priority=5,
             )
 
-            await self.engine.rate_limiter.wait()
-            response = await self.engine.execute(request)
+            try:
+                await self.engine.rate_limiter.wait()
+                response = await asyncio.wait_for(
+                    self.engine.execute(request), timeout=30.0
+                )
+            except (asyncio.TimeoutError, Exception) as exc:
+                self.requests_made += 1
+                self.errors += 1
+                self.logger.debug("Bruteforce timeout/error for %s: %s", path, exc)
+                return
             self.requests_made += 1
 
             # Filter out common false positives
@@ -126,3 +141,46 @@ class DirBruteforceModule(BaseModule):
                 ]
 
         return DEFAULT_DIRS
+
+    async def _probe_backup_files(
+        self, base_url: str, sem: asyncio.Semaphore
+    ) -> None:
+        """Probe backup variants of discovered files (e.g. .bak, .old, ~).
+
+        Processes in batches to avoid spawning thousands of concurrent tasks.
+        """
+        seen_paths: set[str] = set()
+        all_probes: list[str] = []
+
+        for ep in self.engine.discovered_endpoints:
+            if not self._running:
+                break
+
+            parsed = urlparse(ep.url)
+            path = parsed.path.rstrip("/")
+
+            # Only probe files with extensions (not directories)
+            if "." not in path.split("/")[-1]:
+                continue
+            if path in seen_paths:
+                continue
+            seen_paths.add(path)
+
+            rel_path = path.lstrip("/")
+            for suffix in _BACKUP_SUFFIXES:
+                all_probes.append(f"{rel_path}{suffix}")
+
+        if not all_probes:
+            return
+
+        self.logger.info("Probing %d backup file variants in batches", len(all_probes))
+        batch_size = self.engine.config.bruteforce_threads * 2
+        for i in range(0, len(all_probes), batch_size):
+            if not self._running:
+                break
+            batch = all_probes[i : i + batch_size]
+            tasks = [
+                asyncio.create_task(self._test_path(base_url, probe, sem))
+                for probe in batch
+            ]
+            await asyncio.gather(*tasks, return_exceptions=True)

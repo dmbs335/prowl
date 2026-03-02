@@ -25,6 +25,7 @@ class BaseModule(ABC):
         self.requests_made = 0
         self.endpoints_found = 0
         self.errors = 0
+        self.duration_seconds = 0.0
 
     @abstractmethod
     async def run(self, **kwargs: Any) -> None:
@@ -45,4 +46,5 @@ class BaseModule(ABC):
             "requests_made": self.requests_made,
             "endpoints_found": self.endpoints_found,
             "errors": self.errors,
+            "duration_seconds": self.duration_seconds,
         }

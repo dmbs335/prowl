@@ -54,12 +54,16 @@ class InfraDetection:
     version: str = ""
     evidence: list[str] = field(default_factory=list)
     hit_count: int = 0
+    _source_types: set[str] = field(default_factory=set, repr=False)
 
     def add_evidence(self, source: str, detail: str, conf: float) -> None:
         """Add a piece of evidence and boost confidence (capped at 1.0).
 
-        Deduplicates identical evidence strings; only increases hit_count
-        for repeated sightings.
+        Only boosts confidence when evidence comes from a NEW source type
+        (e.g., header + cookie + error_page = strong signal).
+        Repeated evidence from the same source type (e.g., multiple URL
+        path matches) increases hit_count but NOT confidence — this
+        prevents soft-404 and repeated header false positives.
         """
         entry = f"{source}: {detail}"
         self.hit_count += 1
@@ -67,8 +71,12 @@ class InfraDetection:
             self.evidence.append(entry)
         if self.confidence == 0.0:
             self.confidence = conf
-        else:
+            self._source_types.add(source)
+        elif source not in self._source_types:
+            # New source type: boost confidence (cross-source corroboration)
             self.confidence = min(1.0, self.confidence + conf * 0.3)
+            self._source_types.add(source)
+        # Same source type: no confidence boost (avoid repeated false positives)
 
 
 # ---------------------------------------------------------------------------

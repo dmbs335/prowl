@@ -15,17 +15,21 @@ class SessionPool:
     """Manages multiple authenticated sessions with rotation."""
 
     def __init__(self, max_sessions_per_role: int = 3) -> None:
+        self._roles: dict[str, AuthRole] = {}
         self._sessions: dict[str, list[AuthSession]] = {}
         self._max_per_role = max_sessions_per_role
 
     def add_role(self, role: AuthRole) -> None:
         """Register an auth role."""
+        self._roles[role.name] = role
         if role.name not in self._sessions:
             self._sessions[role.name] = []
 
     def add_session(self, session: AuthSession) -> None:
         """Add an active session for a role."""
         role_name = session.role.name
+        if role_name not in self._roles:
+            self._roles[role_name] = session.role
         if role_name not in self._sessions:
             self._sessions[role_name] = []
         sessions = self._sessions[role_name]

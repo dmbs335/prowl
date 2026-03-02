@@ -7,20 +7,26 @@ from typing import Any
 from urllib.parse import urlencode, urljoin, urlparse
 
 from prowl.core.signals import Signal
-from prowl.models.request import CrawlRequest, FormData, FormField, HttpMethod
+from prowl.models.request import CrawlRequest, FormData, FormField, HttpMethod, normalize_url
 from prowl.models.target import Endpoint, Parameter, ParameterLocation
 from prowl.modules.base import BaseModule
 
 # Safe default values for form auto-submission (discovery only, never attack payloads)
 _SAFE_VALUES: dict[str, str] = {
     "q": "test", "query": "test", "search": "test", "keyword": "test",
-    "s": "test", "term": "test",
+    "s": "test", "term": "test", "searchfor": "test", "find": "test",
     "sort": "name", "order": "asc", "orderby": "name",
     "page": "1", "p": "1", "offset": "0",
     "limit": "10", "per_page": "10", "count": "10",
     "filter": "all", "type": "all", "category": "all",
     "lang": "en", "locale": "en",
     "format": "json", "output": "json",
+    # Generic form fields (safe defaults for discovery)
+    "name": "test", "title": "test", "text": "test",
+    "message": "test", "comment": "test", "content": "test",
+    "email": "test@test.com", "url": "http://test.com",
+    "id": "1", "num": "1", "amount": "1",
+    "gobutton": "go", "submit": "submit", "action": "search",
 }
 
 # Field names that indicate unsafe forms (login, payment, etc.)
@@ -59,21 +65,46 @@ class ActiveSpiderModule(BaseModule):
         self._running = True
         await self.engine.signals.emit(Signal.MODULE_STARTED, module=self.name)
 
-        # Seed with target URL
-        seed = CrawlRequest(
-            url=self.engine.config.target_url,
-            source_module=self.name,
-            priority=10,
-        )
-        await self.engine.submit(seed)
+        # Determine seeds: first run uses target URL,
+        # subsequent runs (deep crawl) use white (unspidered) endpoints.
+        if not self.engine._spidered_urls:
+            # Initial crawl: seed with target URL
+            seed = CrawlRequest(
+                url=self.engine.config.target_url,
+                source_module=self.name,
+                priority=10,
+            )
+            await self.engine.submit(seed)
+        else:
+            # Deep crawl: seed with white endpoints
+            white = self.engine.get_unspidered_endpoints()
+            if not white:
+                self.logger.info("Deep crawl: no unspidered endpoints, skipping")
+                self._running = False
+                await self.engine.signals.emit(
+                    Signal.MODULE_COMPLETED, module=self.name, stats=self.get_stats()
+                )
+                return
+            self.logger.info("Deep crawl: %d white endpoints to process", len(white))
+            for ep in white:
+                await self.engine.submit(CrawlRequest(
+                    url=ep.url,
+                    source_module=self.name,
+                    priority=8,
+                    depth=1,  # treat as depth 1 (discovered, not root)
+                ))
+
+        # Process responses as they come -- connect BEFORE workers start
+        # to avoid missing the seed response
+        self.engine.signals.connect(Signal.REQUEST_COMPLETED, self._on_response)
 
         # Start workers to process queue
         await self.engine.run_workers()
 
-        # Process responses as they come
-        self.engine.signals.connect(Signal.REQUEST_COMPLETED, self._on_response)
+        await self._wait_for_completion()
 
-        # Wait until queue is empty, max requests reached, or workers stopped
+    async def _wait_for_completion(self) -> None:
+        """Wait until queue is drained, max requests reached, or saturated."""
         try:
             while self._running:
                 total = self.engine.requests_completed + self.engine.requests_failed
@@ -91,11 +122,16 @@ class ActiveSpiderModule(BaseModule):
                 # Stop if all workers finished
                 if self.engine._workers and all(w.done() for w in self.engine._workers):
                     break
-                if self.engine.queue.empty and self.engine.requests_completed > 0:
+                # Only idle when queue is empty AND no in-flight requests
+                idle = (self.engine.queue.empty
+                        and self.engine._active_requests == 0
+                        and self.engine.requests_completed > 0)
+                if idle:
                     # Give a moment for any pending items
                     import asyncio
                     await asyncio.sleep(1.0)
-                    if self.engine.queue.empty:
+                    if (self.engine.queue.empty
+                            and self.engine._active_requests == 0):
                         break
                 import asyncio
                 await asyncio.sleep(0.5)
@@ -142,6 +178,9 @@ class ActiveSpiderModule(BaseModule):
         await self.engine.register_endpoint(endpoint)
         self.endpoints_found += 1
 
+        # Mark this URL as fully crawled (black) -- links/forms extracted
+        self.engine.mark_spidered(response.url_final or request.url)
+
         # Enqueue discovered links (with Partial Order Reduction)
         next_depth = request.depth + 1
         link_prefixes = Counter(
@@ -161,7 +200,7 @@ class ActiveSpiderModule(BaseModule):
                         link.url, source_module=self.name, depth=next_depth,
                     )
                 else:
-                    priority = 1  # lowest — explored only if budget remains
+                    priority = 1  # lowest - explored only if budget remains
             else:
                 priority = max(0, 10 - request.depth)
 
@@ -177,7 +216,7 @@ class ActiveSpiderModule(BaseModule):
         for form in response.forms:
             if self.engine.config.smart_form_submission:
                 form_type = self._classify_form(form)
-                if form_type in ("search", "filter"):
+                if form_type in ("search", "filter", "generic"):
                     filled_req = self._build_form_request(form, next_depth)
                     if filled_req:
                         await self.engine.submit(filled_req)
@@ -200,6 +239,27 @@ class ActiveSpiderModule(BaseModule):
         # Track JS files
         for js_url in response.js_files:
             await self.engine.signals.emit(Signal.JS_FILE_FOUND, url=js_url)
+
+        # Register resource URLs (img, iframe, video, etc.) as endpoints
+        for res_url in response.resource_urls:
+            res_endpoint = Endpoint(
+                url=res_url,
+                method="GET",
+                status_code=0,
+                source_module=self.name,
+                depth=next_depth,
+                tags=["resource"],
+            )
+            await self.engine.register_endpoint(res_endpoint)
+            # Enqueue iframe sources for spidering (they contain HTML)
+            if "iframe" in res_url or res_url.endswith((".php", ".html", ".asp", ".aspx", ".jsp")):
+                child = CrawlRequest(
+                    url=res_url,
+                    source_module=self.name,
+                    depth=next_depth,
+                    priority=5,
+                )
+                await self.engine.submit(child)
 
     # ── Smart Form Submission helpers ──
 
@@ -229,7 +289,8 @@ class ActiveSpiderModule(BaseModule):
         if form.method == HttpMethod.GET:
             return "filter"
 
-        return "unknown"
+        # POST forms without sensitive fields are safe for discovery
+        return "generic"
 
     @staticmethod
     def _build_form_request(form: FormData, depth: int) -> CrawlRequest | None:
@@ -246,8 +307,9 @@ class ActiveSpiderModule(BaseModule):
 
         if form.method == HttpMethod.GET:
             # Append as query string
-            sep = "&" if "?" in form.action else "?"
-            url = form.action + sep + urlencode(filled)
+            action = normalize_url(form.action)
+            sep = "&" if "?" in action else "?"
+            url = action + sep + urlencode(filled)
             return CrawlRequest(
                 url=url,
                 method=HttpMethod.GET,
@@ -259,7 +321,7 @@ class ActiveSpiderModule(BaseModule):
             # POST with form-encoded body
             body = urlencode(filled).encode()
             return CrawlRequest(
-                url=form.action,
+                url=normalize_url(form.action),
                 method=form.method,
                 headers={"content-type": "application/x-www-form-urlencoded"},
                 body=body,

@@ -3,10 +3,10 @@
 Collects historical URLs from Wayback Machine, CommonCrawl, and AlienVault OTX.
 
 Two-pass structural dedup to avoid junk flooding:
-  Pass 1 — Junk filter: length, percent-encoding density, static-asset extension,
+  Pass 1 - Junk filter: length, percent-encoding density, static-asset extension,
            control chars.  Query strings are stripped (passive cares about path
            structure, not parameters).
-  Pass 2 — Path-tree collapsing: build a tree of path segments; any node whose
+  Pass 2 - Path-tree collapsing: build a tree of path segments; any node whose
            children exceed COLLAPSE_THRESHOLD is treated as parametric and
            collapsed to one representative URL.  This handles /users/alice,
            /users/bob, /blog/post-1, /blog/post-2, … without hard-coded regex.
@@ -199,7 +199,7 @@ class PassiveCollectionModule(BaseModule):
             )
 
     # ------------------------------------------------------------------
-    # Pass 1 — junk filter
+    # Pass 1 - junk filter
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -224,7 +224,7 @@ class PassiveCollectionModule(BaseModule):
         return True
 
     # ------------------------------------------------------------------
-    # Pass 2 — structural dedup
+    # Pass 2 - structural dedup
     # ------------------------------------------------------------------
 
     @staticmethod

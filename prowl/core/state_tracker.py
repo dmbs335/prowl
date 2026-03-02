@@ -1,8 +1,8 @@
 """Hierarchical state management and transition tracking for web app state machines.
 
-Layer 0: SecurityContext   — coarse state for exploration dedup (5-15 per app)
-Layer 1: FunctionalState   — flow tracking (50-200 per app)
-Layer 2: FullState          — everything stored, never used for dedup
+Layer 0: SecurityContext   - coarse state for exploration dedup (5-15 per app)
+Layer 1: FunctionalState   - flow tracking (50-200 per app)
+Layer 2: FullState          - everything stored, never used for dedup
 
 State transitions are detected by monitoring:
 - Set-Cookie changes (new session/token)

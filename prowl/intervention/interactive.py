@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from prowl.core.engine import CrawlEngine
+    from prowl.intervention.approval import ApprovalManager
     from prowl.intervention.manager import InterventionManager
 
 from prowl.intervention.browser_bridge import BrowserBridge
@@ -19,15 +20,20 @@ class InteractiveSession:
     """CLI-based interactive session for handling interventions."""
 
     def __init__(
-        self, engine: CrawlEngine, manager: InterventionManager
+        self,
+        engine: CrawlEngine,
+        manager: InterventionManager,
+        approval_manager: ApprovalManager | None = None,
     ) -> None:
         self._engine = engine
         self._manager = manager
+        self._approval = approval_manager
 
     async def run(self) -> None:
         """Start the interactive REPL loop."""
         print("\n[Prowl Interactive Mode]")
-        print("Commands: status, cookies <str>, resolve <id>, pause, resume, quit\n")
+        print("Commands: status, cookies <str>, resolve <id>, pause, resume,")
+        print("          approvals, approve <id>, reject <id>, approve-all, quit\n")
 
         while True:
             try:
@@ -58,6 +64,14 @@ class InteractiveSession:
                     print("Engine resumed.")
                 elif cmd == "interventions":
                     self._list_interventions()
+                elif cmd == "approvals":
+                    self._list_approvals()
+                elif cmd == "approve":
+                    await self._approve_request(arg)
+                elif cmd == "reject":
+                    await self._reject_request(arg)
+                elif cmd == "approve-all":
+                    await self._approve_all()
                 else:
                     print(f"Unknown command: {cmd}")
 
@@ -109,3 +123,53 @@ class InteractiveSession:
             print(f"  Intervention {intervention_id} resolved.")
         else:
             print(f"  Intervention {intervention_id} not found or already resolved.")
+
+    # --- Approval commands ---
+
+    def _list_approvals(self) -> None:
+        if not self._approval:
+            print("  Approval guardrail not enabled.")
+            return
+        items = self._approval.get_all()
+        pending = [i for i in items if i["state"] == "pending"]
+        if not pending:
+            print("  No pending approvals.")
+            return
+        print(f"  {len(pending)} pending approval(s):")
+        for i in pending:
+            req = i["request"]
+            body_hint = f" body={req['body'][:60]}..." if req.get("body") else ""
+            print(f"  [{i['id']}] {i['kind']} -- {req['method']} {req['url']}{body_hint}")
+
+    async def _approve_request(self, item_id: str) -> None:
+        if not self._approval:
+            print("  Approval guardrail not enabled.")
+            return
+        if not item_id:
+            print("  Usage: approve <id>")
+            return
+        req = await self._approval.approve(item_id)
+        if req:
+            print(f"  Approved: {req.method.upper()} {req.url}")
+        else:
+            print(f"  Item {item_id} not found or already resolved.")
+
+    async def _reject_request(self, item_id: str) -> None:
+        if not self._approval:
+            print("  Approval guardrail not enabled.")
+            return
+        if not item_id:
+            print("  Usage: reject <id>")
+            return
+        success = await self._approval.reject(item_id)
+        if success:
+            print(f"  Rejected: {item_id}")
+        else:
+            print(f"  Item {item_id} not found or already resolved.")
+
+    async def _approve_all(self) -> None:
+        if not self._approval:
+            print("  Approval guardrail not enabled.")
+            return
+        approved = await self._approval.approve_all()
+        print(f"  Approved {len(approved)} request(s).")

@@ -1,0 +1,3146 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Prowl LLM Orchestration API",
+    "description": "REST API for LLM-driven orchestration of the Prowl security crawler. Enables programmatic crawl control, discovery queries, mid-crawl adjustments, intervention handling, and attack surface reporting.",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/crawl/start": {
+      "post": {
+        "tags": [
+          "v1",
+          "crawl"
+        ],
+        "summary": "Start a new crawl",
+        "description": "Launch a new crawl session with full configuration. The crawl runs as a background task. Use GET /crawl/status to monitor progress.",
+        "operationId": "start_crawl_api_v1_crawl_start_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CrawlStartRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrawlStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/crawl/status": {
+      "get": {
+        "tags": [
+          "v1",
+          "crawl"
+        ],
+        "summary": "Get crawl status",
+        "description": "Returns full crawl status: engine state, request counts, coverage stats, rate limiter state, current phase.",
+        "operationId": "get_status_api_v1_crawl_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CrawlStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/crawl/pause": {
+      "post": {
+        "tags": [
+          "v1",
+          "crawl"
+        ],
+        "summary": "Pause the crawl",
+        "description": "Pause all crawl workers. Queued requests are preserved.",
+        "operationId": "pause_crawl_api_v1_crawl_pause_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/crawl/resume": {
+      "post": {
+        "tags": [
+          "v1",
+          "crawl"
+        ],
+        "summary": "Resume the crawl",
+        "description": "Resume a paused crawl.",
+        "operationId": "resume_crawl_api_v1_crawl_resume_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/crawl/stop": {
+      "post": {
+        "tags": [
+          "v1",
+          "crawl"
+        ],
+        "summary": "Stop the crawl",
+        "description": "Gracefully stop the crawl. Flushes pending data and writes output.",
+        "operationId": "stop_crawl_api_v1_crawl_stop_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/crawl/config": {
+      "get": {
+        "tags": [
+          "v1",
+          "crawl"
+        ],
+        "summary": "Get current crawl config",
+        "description": "Returns the CrawlConfig used for the current/last crawl.",
+        "operationId": "get_config_api_v1_crawl_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Config Api V1 Crawl Config Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/phases": {
+      "get": {
+        "tags": [
+          "v1",
+          "crawl"
+        ],
+        "summary": "List all pipeline phases",
+        "description": "Returns all 10 pipeline phases with current state and exploration statistics.",
+        "operationId": "list_phases_api_v1_phases_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PhaseStatusResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Phases Api V1 Phases Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/phases/{name}": {
+      "get": {
+        "tags": [
+          "v1",
+          "crawl"
+        ],
+        "summary": "Get phase detail",
+        "description": "Returns detail for a specific pipeline phase by name.",
+        "operationId": "get_phase_api_v1_phases__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PhaseStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/modules": {
+      "get": {
+        "tags": [
+          "v1",
+          "crawl"
+        ],
+        "summary": "List all module stats",
+        "description": "Returns stats for all 13 discovery modules.",
+        "operationId": "list_modules_api_v1_modules_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ModuleStatusResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Modules Api V1 Modules Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/modules/{name}": {
+      "get": {
+        "tags": [
+          "v1",
+          "crawl"
+        ],
+        "summary": "Get module detail",
+        "description": "Returns detail for a specific module by name.",
+        "operationId": "get_module_api_v1_modules__name__get",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModuleStatusResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/endpoints": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Query discovered endpoints",
+        "description": "Returns endpoints with rich filtering. Supports filtering by tag, page_type, HTTP method, auth requirement, parameter presence, source module, and URL pattern.",
+        "operationId": "list_endpoints_api_v1_endpoints_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "description": "Page size (max 500)",
+              "default": 50,
+              "title": "Limit"
+            },
+            "description": "Page size (max 500)"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Offset for pagination",
+              "default": 0,
+              "title": "Offset"
+            },
+            "description": "Offset for pagination"
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by tag (e.g. api, admin, debug)",
+              "title": "Tag"
+            },
+            "description": "Filter by tag (e.g. api, admin, debug)"
+          },
+          {
+            "name": "page_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by page type (login, error, api_json, admin, etc.)",
+              "title": "Page Type"
+            },
+            "description": "Filter by page type (login, error, api_json, admin, etc.)"
+          },
+          {
+            "name": "method",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by HTTP method (GET, POST, PUT, etc.)",
+              "title": "Method"
+            },
+            "description": "Filter by HTTP method (GET, POST, PUT, etc.)"
+          },
+          {
+            "name": "requires_auth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by auth requirement",
+              "title": "Requires Auth"
+            },
+            "description": "Filter by auth requirement"
+          },
+          {
+            "name": "has_params",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by parameter presence",
+              "title": "Has Params"
+            },
+            "description": "Filter by parameter presence"
+          },
+          {
+            "name": "source_module",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by source module (s1_spider, s4_js, etc.)",
+              "title": "Source Module"
+            },
+            "description": "Filter by source module (s1_spider, s4_js, etc.)"
+          },
+          {
+            "name": "url_pattern",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Substring match on URL",
+              "title": "Url Pattern"
+            },
+            "description": "Substring match on URL"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/endpoints/{fingerprint}": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Get endpoint by fingerprint",
+        "description": "Returns a single endpoint by its fingerprint hash.",
+        "operationId": "get_endpoint_api_v1_endpoints__fingerprint__get",
+        "parameters": [
+          {
+            "name": "fingerprint",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Fingerprint"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/input-vectors": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Query input vectors",
+        "description": "Returns input vectors (attack surface parameters) with filtering by risk indicator, location, reflection status, and endpoint URL.",
+        "operationId": "list_input_vectors_api_v1_input_vectors_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "risk_indicator",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by risk tag (ssrf_candidate, sqli_candidate, cmdi_candidate, etc.)",
+              "title": "Risk Indicator"
+            },
+            "description": "Filter by risk tag (ssrf_candidate, sqli_candidate, cmdi_candidate, etc.)"
+          },
+          {
+            "name": "location",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by location (query, body, header, cookie, path)",
+              "title": "Location"
+            },
+            "description": "Filter by location (query, body, header, cookie, path)"
+          },
+          {
+            "name": "is_reflected",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by reflection status (XSS candidates)",
+              "title": "Is Reflected"
+            },
+            "description": "Filter by reflection status (XSS candidates)"
+          },
+          {
+            "name": "endpoint_url",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by endpoint URL substring",
+              "title": "Endpoint Url"
+            },
+            "description": "Filter by endpoint URL substring"
+          },
+          {
+            "name": "source_module",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by source module",
+              "title": "Source Module"
+            },
+            "description": "Filter by source module"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/tech-stack": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Get detected technologies",
+        "description": "Returns all detected technologies with confidence scores and evidence.",
+        "operationId": "list_tech_stack_api_v1_tech_stack_get",
+        "parameters": [
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by category (framework, server, cms, frontend, waf)",
+              "title": "Category"
+            },
+            "description": "Filter by category (framework, server, cms, frontend, waf)"
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "description": "Minimum confidence threshold",
+              "default": 0.0,
+              "title": "Min Confidence"
+            },
+            "description": "Minimum confidence threshold"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TechFingerprintResponse"
+                  },
+                  "title": "Response List Tech Stack Api V1 Tech Stack Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/secrets": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Get discovered secrets",
+        "description": "Returns all discovered secrets (API keys, tokens, passwords).",
+        "operationId": "list_secrets_api_v1_secrets_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by secret kind (api_key, token, etc.)",
+              "title": "Kind"
+            },
+            "description": "Filter by secret kind (api_key, token, etc.)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SecretResponse"
+                  },
+                  "title": "Response List Secrets Api V1 Secrets Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth-boundaries": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Get auth boundaries",
+        "description": "Returns authentication boundary transitions.",
+        "operationId": "list_auth_boundaries_api_v1_auth_boundaries_get",
+        "parameters": [
+          {
+            "name": "boundary_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by type (redirect_to_login, 403_forbidden, etc.)",
+              "title": "Boundary Type"
+            },
+            "description": "Filter by type (redirect_to_login, 403_forbidden, etc.)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "default": 100,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuthBoundaryResponse"
+                  },
+                  "title": "Response List Auth Boundaries Api V1 Auth Boundaries Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/transactions": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Query HTTP transactions",
+        "description": "Query stored HTTP transactions (request/response pairs) without bodies. Use GET /transactions/{id} for full detail and /transactions/{id}/response-body for body content.",
+        "operationId": "list_transactions_api_v1_transactions_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 500,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "url_pattern",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "URL LIKE pattern (use % as wildcard)",
+              "title": "Url Pattern"
+            },
+            "description": "URL LIKE pattern (use % as wildcard)"
+          },
+          {
+            "name": "source_module",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by source module",
+              "title": "Source Module"
+            },
+            "description": "Filter by source module"
+          },
+          {
+            "name": "page_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by page type",
+              "title": "Page Type"
+            },
+            "description": "Filter by page type"
+          },
+          {
+            "name": "content_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by response content type (substring)",
+              "title": "Content Type"
+            },
+            "description": "Filter by response content type (substring)"
+          },
+          {
+            "name": "status_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Minimum response status code",
+              "title": "Status Min"
+            },
+            "description": "Minimum response status code"
+          },
+          {
+            "name": "status_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Maximum response status code",
+              "title": "Status Max"
+            },
+            "description": "Maximum response status code"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/transactions/{txn_id}": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Get transaction detail",
+        "description": "Returns full transaction detail including headers and body sizes.",
+        "operationId": "get_transaction_api_v1_transactions__txn_id__get",
+        "parameters": [
+          {
+            "name": "txn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Txn Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TransactionDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/transactions/{txn_id}/response-body": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Get transaction response body",
+        "description": "Returns the raw response body bytes for a specific transaction.",
+        "operationId": "get_transaction_body_api_v1_transactions__txn_id__response_body_get",
+        "parameters": [
+          {
+            "name": "txn_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Txn Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/sitemap": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Get hierarchical sitemap",
+        "description": "Returns a tree structure of discovered endpoints organized by host and path.",
+        "operationId": "get_sitemap_api_v1_sitemap_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Sitemap Api V1 Sitemap Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/graph": {
+      "get": {
+        "tags": [
+          "v1",
+          "discovery"
+        ],
+        "summary": "Get site structure graph",
+        "description": "Returns a node/edge graph of discovered paths for visualization.",
+        "operationId": "get_graph_api_v1_graph_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "description": "Maximum number of endpoints to include",
+              "default": 500,
+              "title": "Limit"
+            },
+            "description": "Maximum number of endpoints to include"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Graph Api V1 Graph Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/inject/urls": {
+      "post": {
+        "tags": [
+          "v1",
+          "control"
+        ],
+        "summary": "Inject URLs into crawl queue",
+        "description": "Programmatically inject URLs into the active crawl queue. URLs are validated against scope and dedup before acceptance.",
+        "operationId": "inject_urls_api_v1_inject_urls_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InjectURLsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InjectURLsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scope": {
+      "get": {
+        "tags": [
+          "v1",
+          "control"
+        ],
+        "summary": "Get current scope",
+        "description": "Returns the current crawl scope configuration: target host and regex patterns.",
+        "operationId": "get_scope_api_v1_scope_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScopeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/scope/update": {
+      "post": {
+        "tags": [
+          "v1",
+          "control"
+        ],
+        "summary": "Update crawl scope",
+        "description": "Add include/exclude regex patterns to the crawl scope at runtime. Scope can only be expanded, not contracted.",
+        "operationId": "update_scope_api_v1_scope_update_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopeUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/session/inject": {
+      "post": {
+        "tags": [
+          "v1",
+          "control"
+        ],
+        "summary": "Inject auth session",
+        "description": "Inject authentication session data (cookies, headers, bearer token) into the session pool for a specific role.",
+        "operationId": "inject_session_api_v1_session_inject_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionInjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/queue/stats": {
+      "get": {
+        "tags": [
+          "v1",
+          "control"
+        ],
+        "summary": "Get queue statistics",
+        "description": "Returns current queue size, total URLs queued, and total dropped.",
+        "operationId": "get_queue_stats_api_v1_queue_stats_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueStatsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config/update": {
+      "post": {
+        "tags": [
+          "v1",
+          "control"
+        ],
+        "summary": "Hot-update crawl config",
+        "description": "Update mutable configuration fields mid-crawl without restart. Only max_depth, max_requests, request_delay, saturation_threshold, and user_agent can be changed at runtime.",
+        "operationId": "update_config_api_v1_config_update_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/interventions": {
+      "get": {
+        "tags": [
+          "v1",
+          "control"
+        ],
+        "summary": "List all interventions",
+        "description": "Returns all intervention requests (pending, resolved, expired).",
+        "operationId": "list_interventions_api_v1_interventions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InterventionResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Interventions Api V1 Interventions Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/interventions/pending": {
+      "get": {
+        "tags": [
+          "v1",
+          "control"
+        ],
+        "summary": "List pending interventions",
+        "description": "Returns only pending interventions that need resolution.",
+        "operationId": "list_pending_interventions_api_v1_interventions_pending_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/InterventionResponse"
+                  },
+                  "type": "array",
+                  "title": "Response List Pending Interventions Api V1 Interventions Pending Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/interventions/{intervention_id}/resolve": {
+      "post": {
+        "tags": [
+          "v1",
+          "control"
+        ],
+        "summary": "Resolve an intervention",
+        "description": "Resolve an intervention by providing auth data (cookies, headers, token, credentials). The engine is automatically resumed after resolution.",
+        "operationId": "resolve_intervention_api_v1_interventions__intervention_id__resolve_post",
+        "parameters": [
+          {
+            "name": "intervention_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Intervention Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveInterventionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/report/summary": {
+      "get": {
+        "tags": [
+          "v1",
+          "reports"
+        ],
+        "summary": "Attack surface summary",
+        "description": "High-level attack surface overview with risk score, endpoint/vector/tech/secret counts for LLM triage.",
+        "operationId": "get_summary_api_v1_report_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttackSurfaceSummaryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/report/risk": {
+      "get": {
+        "tags": [
+          "v1",
+          "reports"
+        ],
+        "summary": "Risk summary",
+        "description": "Composite risk score (0-100) with breakdown: high-risk vectors, unprotected admin, exposed debug, secrets.",
+        "operationId": "get_risk_api_v1_report_risk_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskSummaryResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/report/high-risk": {
+      "get": {
+        "tags": [
+          "v1",
+          "reports"
+        ],
+        "summary": "High-risk findings",
+        "description": "Consolidated high-risk findings: input vectors with risk indicators, unprotected admin endpoints, exposed debug endpoints, and discovered secrets.",
+        "operationId": "get_high_risk_api_v1_report_high_risk_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HighRiskFindingsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/report/exploration": {
+      "get": {
+        "tags": [
+          "v1",
+          "reports"
+        ],
+        "summary": "Exploration statistics",
+        "description": "Coverage bitmap, hindsight feedback, rate limiter state, per-phase exploration stats, and per-module stats.",
+        "operationId": "get_exploration_api_v1_report_exploration_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplorationStatsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/report/full": {
+      "get": {
+        "tags": [
+          "v1",
+          "reports"
+        ],
+        "summary": "Full attack surface report",
+        "description": "Returns the complete AttackSurfaceReport as JSON. Warning: this can be large for big scans.",
+        "operationId": "get_full_report_api_v1_report_full_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "type": "object",
+                  "title": "Response Get Full Report Api V1 Report Full Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/report/hindsight": {
+      "get": {
+        "tags": [
+          "v1",
+          "reports"
+        ],
+        "summary": "Hindsight analysis insights",
+        "description": "Returns hindsight feedback insights: patterns detected from non-success responses (auth boundaries, method hints, etc.).",
+        "operationId": "get_hindsight_api_v1_report_hindsight_get",
+        "parameters": [
+          {
+            "name": "insight_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by insight type (auth_redirect, method_not_allowed, etc.)",
+              "title": "Insight Type"
+            },
+            "description": "Filter by insight type (auth_redirect, method_not_allowed, etc.)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Get Hindsight Api V1 Report Hindsight Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AttackSurfaceSummaryResponse": {
+        "properties": {
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "scan_duration": {
+            "type": "number",
+            "title": "Scan Duration"
+          },
+          "risk_summary": {
+            "$ref": "#/components/schemas/RiskSummaryResponse"
+          },
+          "endpoint_count": {
+            "type": "integer",
+            "title": "Endpoint Count"
+          },
+          "input_vector_count": {
+            "type": "integer",
+            "title": "Input Vector Count"
+          },
+          "tech_count": {
+            "type": "integer",
+            "title": "Tech Count"
+          },
+          "secret_count": {
+            "type": "integer",
+            "title": "Secret Count"
+          },
+          "auth_boundary_count": {
+            "type": "integer",
+            "title": "Auth Boundary Count"
+          },
+          "api_schema_count": {
+            "type": "integer",
+            "title": "Api Schema Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target",
+          "scan_duration",
+          "risk_summary",
+          "endpoint_count",
+          "input_vector_count",
+          "tech_count",
+          "secret_count",
+          "auth_boundary_count",
+          "api_schema_count"
+        ],
+        "title": "AttackSurfaceSummaryResponse",
+        "description": "High-level attack surface summary for LLM triage."
+      },
+      "AuthBoundaryResponse": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method",
+            "default": "GET"
+          },
+          "unauth_status": {
+            "type": "integer",
+            "title": "Unauth Status",
+            "default": 0
+          },
+          "auth_status": {
+            "type": "integer",
+            "title": "Auth Status",
+            "default": 0
+          },
+          "boundary_type": {
+            "type": "string",
+            "title": "Boundary Type",
+            "description": "Type: redirect_to_login, 403_forbidden, content_difference",
+            "default": ""
+          },
+          "access_matrix": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Access Matrix",
+            "description": "Role -> status code mapping"
+          }
+        },
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "title": "AuthBoundaryResponse"
+      },
+      "ConfigUpdateRequest": {
+        "properties": {
+          "max_depth": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Depth",
+            "description": "Update max crawl depth"
+          },
+          "max_requests": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Requests",
+            "description": "Update max total requests"
+          },
+          "request_delay": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Delay",
+            "description": "Update base request delay"
+          },
+          "saturation_threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Saturation Threshold",
+            "description": "Update saturation detection threshold"
+          },
+          "user_agent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Agent",
+            "description": "Update User-Agent header"
+          }
+        },
+        "type": "object",
+        "title": "ConfigUpdateRequest",
+        "description": "Hot-update mutable configuration fields mid-crawl."
+      },
+      "CrawlStartRequest": {
+        "properties": {
+          "target_url": {
+            "type": "string",
+            "title": "Target Url",
+            "description": "Target URL to crawl"
+          },
+          "scope_patterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scope Patterns",
+            "description": "Regex patterns to include in scope"
+          },
+          "exclude_patterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exclude Patterns",
+            "description": "Regex patterns to exclude from scope"
+          },
+          "max_depth": {
+            "type": "integer",
+            "title": "Max Depth",
+            "description": "Maximum crawl depth",
+            "default": 10
+          },
+          "max_requests": {
+            "type": "integer",
+            "title": "Max Requests",
+            "description": "Maximum total requests",
+            "default": 10000
+          },
+          "concurrency": {
+            "type": "integer",
+            "title": "Concurrency",
+            "description": "Concurrent request workers",
+            "default": 10
+          },
+          "request_delay": {
+            "type": "number",
+            "title": "Request Delay",
+            "description": "Base delay between requests (seconds)",
+            "default": 0.0
+          },
+          "request_timeout": {
+            "type": "number",
+            "title": "Request Timeout",
+            "description": "HTTP request timeout (seconds)",
+            "default": 30.0
+          },
+          "user_agent": {
+            "type": "string",
+            "title": "User Agent",
+            "description": "User-Agent header value",
+            "default": "Prowl/0.1"
+          },
+          "follow_redirects": {
+            "type": "boolean",
+            "title": "Follow Redirects",
+            "description": "Follow HTTP redirects",
+            "default": true
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "http",
+              "browser",
+              "hybrid"
+            ],
+            "title": "Backend",
+            "description": "Request backend type",
+            "default": "hybrid"
+          },
+          "headless": {
+            "type": "boolean",
+            "title": "Headless",
+            "description": "Headless browser mode",
+            "default": true
+          },
+          "modules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Modules",
+            "description": "Modules to run (empty=all). Options: s1_spider, s2_bruteforce, s3_params, s4_js, s5_api, s6_passive, s7_auth, s8_states, s9_infra, s10_tech, s11_input, s12_auth, s13_report"
+          },
+          "output_dir": {
+            "type": "string",
+            "title": "Output Dir",
+            "description": "Output directory path",
+            "default": "./prowl-output"
+          },
+          "output_formats": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Output Formats",
+            "description": "Output formats: json, markdown, html, burp"
+          },
+          "llm_model": {
+            "type": "string",
+            "title": "Llm Model",
+            "description": "LLM model name (e.g. gpt-4o-mini)",
+            "default": ""
+          },
+          "llm_api_key": {
+            "type": "string",
+            "title": "Llm Api Key",
+            "description": "LLM API key",
+            "default": ""
+          },
+          "coverage_guided": {
+            "type": "boolean",
+            "title": "Coverage Guided",
+            "description": "Enable coverage-guided exploration",
+            "default": true
+          },
+          "seed_scheduling": {
+            "type": "boolean",
+            "title": "Seed Scheduling",
+            "description": "Enable Thompson Sampling seed scheduling",
+            "default": true
+          },
+          "saturation_threshold": {
+            "type": "number",
+            "title": "Saturation Threshold",
+            "description": "Coverage saturation threshold",
+            "default": 0.02
+          },
+          "wordlist_dirs": {
+            "type": "string",
+            "title": "Wordlist Dirs",
+            "description": "Path to directory wordlist file",
+            "default": ""
+          },
+          "wordlist_params": {
+            "type": "string",
+            "title": "Wordlist Params",
+            "description": "Path to parameter wordlist file",
+            "default": ""
+          },
+          "auth_roles": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Auth Roles",
+            "description": "Auth role configurations"
+          },
+          "dashboard": {
+            "type": "boolean",
+            "title": "Dashboard",
+            "description": "Enable web dashboard (already running if using API)",
+            "default": false
+          },
+          "dashboard_port": {
+            "type": "integer",
+            "title": "Dashboard Port",
+            "description": "Dashboard port",
+            "default": 8484
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_url"
+        ],
+        "title": "CrawlStartRequest",
+        "description": "Full crawl configuration for programmatic launch.",
+        "examples": [
+          {
+            "concurrency": 15,
+            "max_depth": 5,
+            "modules": [
+              "s6_passive",
+              "s1_spider",
+              "s4_js"
+            ],
+            "target_url": "https://example.com"
+          }
+        ]
+      },
+      "CrawlStatusResponse": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State",
+            "description": "Engine state: idle, running, paused, stopping, stopped"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target",
+            "description": "Target URL"
+          },
+          "elapsed": {
+            "type": "number",
+            "title": "Elapsed",
+            "description": "Elapsed time in seconds"
+          },
+          "requests_completed": {
+            "type": "integer",
+            "title": "Requests Completed"
+          },
+          "requests_failed": {
+            "type": "integer",
+            "title": "Requests Failed"
+          },
+          "requests_queued": {
+            "type": "integer",
+            "title": "Requests Queued"
+          },
+          "requests_dropped": {
+            "type": "integer",
+            "title": "Requests Dropped"
+          },
+          "queue_size": {
+            "type": "integer",
+            "title": "Queue Size"
+          },
+          "endpoints_found": {
+            "type": "integer",
+            "title": "Endpoints Found"
+          },
+          "unique_urls": {
+            "type": "integer",
+            "title": "Unique Urls"
+          },
+          "transactions_stored": {
+            "type": "integer",
+            "title": "Transactions Stored"
+          },
+          "phase_name": {
+            "type": "string",
+            "title": "Phase Name",
+            "description": "Current phase name"
+          },
+          "current_phase": {
+            "type": "integer",
+            "title": "Current Phase",
+            "description": "Current phase index"
+          },
+          "coverage": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Coverage",
+            "description": "Coverage bitmap statistics"
+          },
+          "hindsight": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Hindsight",
+            "description": "Hindsight feedback statistics"
+          },
+          "rate_limiter": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Rate Limiter",
+            "description": "Adaptive rate limiter state"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "target",
+          "elapsed",
+          "requests_completed",
+          "requests_failed",
+          "requests_queued",
+          "requests_dropped",
+          "queue_size",
+          "endpoints_found",
+          "unique_urls",
+          "transactions_stored",
+          "phase_name",
+          "current_phase",
+          "coverage",
+          "hindsight",
+          "rate_limiter"
+        ],
+        "title": "CrawlStatusResponse",
+        "description": "Full crawl status snapshot."
+      },
+      "EndpointResponse": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "parameters": {
+            "items": {
+              "$ref": "#/components/schemas/ParameterResponse"
+            },
+            "type": "array",
+            "title": "Parameters"
+          },
+          "status_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Code"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type",
+            "default": ""
+          },
+          "source_module": {
+            "type": "string",
+            "title": "Source Module",
+            "default": ""
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth",
+            "default": 0
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Tags"
+          },
+          "page_type": {
+            "type": "string",
+            "title": "Page Type",
+            "description": "Page classification: login, error, api_json, admin, static, custom_404",
+            "default": ""
+          },
+          "requires_auth": {
+            "type": "boolean",
+            "title": "Requires Auth",
+            "default": false
+          },
+          "input_vector_count": {
+            "type": "integer",
+            "title": "Input Vector Count",
+            "default": 0
+          },
+          "param_count": {
+            "type": "integer",
+            "title": "Param Count",
+            "default": 0
+          },
+          "path_template": {
+            "type": "string",
+            "title": "Path Template",
+            "default": ""
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "url",
+          "method"
+        ],
+        "title": "EndpointResponse"
+      },
+      "ExplorationStatsResponse": {
+        "properties": {
+          "coverage": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Coverage",
+            "description": "Coverage bitmap stats"
+          },
+          "hindsight": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Hindsight",
+            "description": "Hindsight feedback stats"
+          },
+          "rate_limiter": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Rate Limiter",
+            "description": "Adaptive rate limiter state"
+          },
+          "phase_exploration": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Phase Exploration",
+            "description": "Per-phase exploration: new_coverage, discovery_rate, requests, elapsed"
+          },
+          "module_stats": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Module Stats",
+            "description": "Per-module statistics"
+          }
+        },
+        "type": "object",
+        "required": [
+          "coverage",
+          "hindsight",
+          "rate_limiter"
+        ],
+        "title": "ExplorationStatsResponse",
+        "description": "Coverage and exploration strategy statistics."
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HighRiskFindingsResponse": {
+        "properties": {
+          "high_risk_input_vectors": {
+            "items": {
+              "$ref": "#/components/schemas/InputVectorResponse"
+            },
+            "type": "array",
+            "title": "High Risk Input Vectors"
+          },
+          "unprotected_admin_endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/EndpointResponse"
+            },
+            "type": "array",
+            "title": "Unprotected Admin Endpoints"
+          },
+          "exposed_debug_endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/EndpointResponse"
+            },
+            "type": "array",
+            "title": "Exposed Debug Endpoints"
+          },
+          "secrets": {
+            "items": {
+              "$ref": "#/components/schemas/SecretResponse"
+            },
+            "type": "array",
+            "title": "Secrets"
+          }
+        },
+        "type": "object",
+        "title": "HighRiskFindingsResponse",
+        "description": "Consolidated high-risk findings for LLM prioritization."
+      },
+      "InjectURLsRequest": {
+        "properties": {
+          "urls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Urls",
+            "description": "URLs to inject"
+          },
+          "source_module": {
+            "type": "string",
+            "title": "Source Module",
+            "description": "Source label for injected URLs",
+            "default": "api_injection"
+          },
+          "priority": {
+            "type": "integer",
+            "title": "Priority",
+            "description": "Queue priority (higher = processed sooner)",
+            "default": 15
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth",
+            "description": "Crawl depth for injected URLs",
+            "default": 0
+          },
+          "auth_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auth Role",
+            "description": "Auth role to use for these requests"
+          }
+        },
+        "type": "object",
+        "required": [
+          "urls"
+        ],
+        "title": "InjectURLsRequest",
+        "description": "Inject URLs into the crawl queue."
+      },
+      "InjectURLsResponse": {
+        "properties": {
+          "accepted": {
+            "type": "integer",
+            "title": "Accepted",
+            "description": "URLs accepted into queue"
+          },
+          "rejected_out_of_scope": {
+            "type": "integer",
+            "title": "Rejected Out Of Scope",
+            "description": "URLs rejected (out of scope)"
+          },
+          "rejected_duplicate": {
+            "type": "integer",
+            "title": "Rejected Duplicate",
+            "description": "URLs rejected (already seen)"
+          },
+          "rejected_depth": {
+            "type": "integer",
+            "title": "Rejected Depth",
+            "description": "URLs rejected (exceeds max depth)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "accepted",
+          "rejected_out_of_scope",
+          "rejected_duplicate",
+          "rejected_depth"
+        ],
+        "title": "InjectURLsResponse"
+      },
+      "InputVectorResponse": {
+        "properties": {
+          "endpoint_url": {
+            "type": "string",
+            "title": "Endpoint Url"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "location": {
+            "type": "string",
+            "title": "Location",
+            "description": "Input location: query, body, header, cookie, path"
+          },
+          "input_type": {
+            "type": "string",
+            "title": "Input Type",
+            "description": "Data type: string, integer, file, json, xml",
+            "default": "string"
+          },
+          "is_reflected": {
+            "type": "boolean",
+            "title": "Is Reflected",
+            "description": "Value appears in response (XSS candidate)",
+            "default": false
+          },
+          "sample_values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sample Values"
+          },
+          "risk_indicators": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Risk Indicators",
+            "description": "Risk tags: ssrf_candidate, lfi_candidate, sqli_candidate, cmdi_candidate, ssti_candidate, redirect_candidate"
+          },
+          "source_module": {
+            "type": "string",
+            "title": "Source Module",
+            "default": ""
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "endpoint_url",
+          "name",
+          "location"
+        ],
+        "title": "InputVectorResponse"
+      },
+      "InterventionResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "Intervention type: login, captcha, two_fa, manual"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "module": {
+            "type": "string",
+            "title": "Module"
+          },
+          "state": {
+            "type": "string",
+            "title": "State",
+            "description": "State: pending, in_progress, resolved, expired"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "message",
+          "module",
+          "state"
+        ],
+        "title": "InterventionResponse"
+      },
+      "ModuleStatusResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "state": {
+            "type": "string",
+            "title": "State",
+            "description": "Module state: pending, running, complete, error, needs_attention"
+          },
+          "requests_made": {
+            "type": "integer",
+            "title": "Requests Made",
+            "default": 0
+          },
+          "endpoints_found": {
+            "type": "integer",
+            "title": "Endpoints Found",
+            "default": 0
+          },
+          "errors": {
+            "type": "integer",
+            "title": "Errors",
+            "default": 0
+          },
+          "duration_seconds": {
+            "type": "number",
+            "title": "Duration Seconds",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "state"
+        ],
+        "title": "ModuleStatusResponse"
+      },
+      "OperationResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "description": "Operation result: ok, paused, resumed, stopped, resolved, error"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "title": "OperationResponse"
+      },
+      "PaginatedResponse": {
+        "properties": {
+          "items": {
+            "items": {},
+            "type": "array",
+            "title": "Items",
+            "description": "Page of results"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "description": "Total matching items"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset",
+            "description": "Current offset"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "description": "Page size"
+          },
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More",
+            "description": "Whether more items exist beyond this page"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "offset",
+          "limit",
+          "has_more"
+        ],
+        "title": "PaginatedResponse",
+        "description": "Cursor-based pagination wrapper."
+      },
+      "ParameterResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "location": {
+            "type": "string",
+            "title": "Location",
+            "description": "Parameter location: query, body, header, cookie, path, graphql_arg"
+          },
+          "sample_values": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sample Values"
+          },
+          "param_type": {
+            "type": "string",
+            "title": "Param Type",
+            "default": "string"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "default": false
+          },
+          "source_module": {
+            "type": "string",
+            "title": "Source Module",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "location"
+        ],
+        "title": "ParameterResponse"
+      },
+      "PhaseStatusResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "state": {
+            "type": "string",
+            "title": "State",
+            "description": "Phase state: pending, running, complete, error, skipped"
+          },
+          "modules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Modules"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Depends On"
+          },
+          "parallel": {
+            "type": "boolean",
+            "title": "Parallel"
+          },
+          "exploration": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exploration",
+            "description": "Exploration stats: new_coverage, discovery_rate, requests, elapsed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "state",
+          "modules",
+          "depends_on",
+          "parallel"
+        ],
+        "title": "PhaseStatusResponse"
+      },
+      "QueueStatsResponse": {
+        "properties": {
+          "queue_size": {
+            "type": "integer",
+            "title": "Queue Size",
+            "description": "Current queue size"
+          },
+          "total_queued": {
+            "type": "integer",
+            "title": "Total Queued",
+            "description": "Total URLs queued since start"
+          },
+          "total_dropped": {
+            "type": "integer",
+            "title": "Total Dropped",
+            "description": "Total URLs dropped (dedup)"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queue_size",
+          "total_queued",
+          "total_dropped"
+        ],
+        "title": "QueueStatsResponse"
+      },
+      "ResolveInterventionRequest": {
+        "properties": {
+          "cookies": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Cookies",
+            "description": "Session cookies"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Headers",
+            "description": "Auth headers"
+          },
+          "token": {
+            "type": "string",
+            "title": "Token",
+            "description": "Bearer token",
+            "default": ""
+          },
+          "credentials": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Credentials",
+            "description": "Login credentials (username, password)"
+          },
+          "extra_data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Extra Data",
+            "description": "Additional resolution data"
+          }
+        },
+        "type": "object",
+        "title": "ResolveInterventionRequest",
+        "description": "Provide auth data to resolve an intervention."
+      },
+      "RiskSummaryResponse": {
+        "properties": {
+          "total_endpoints": {
+            "type": "integer",
+            "title": "Total Endpoints",
+            "default": 0
+          },
+          "total_input_vectors": {
+            "type": "integer",
+            "title": "Total Input Vectors",
+            "default": 0
+          },
+          "high_risk_vectors": {
+            "type": "integer",
+            "title": "High Risk Vectors",
+            "description": "Input vectors with risk indicators (ssrf, sqli, cmdi, etc.)",
+            "default": 0
+          },
+          "auth_boundaries_found": {
+            "type": "integer",
+            "title": "Auth Boundaries Found",
+            "default": 0
+          },
+          "unprotected_admin_paths": {
+            "type": "integer",
+            "title": "Unprotected Admin Paths",
+            "default": 0
+          },
+          "exposed_debug_endpoints": {
+            "type": "integer",
+            "title": "Exposed Debug Endpoints",
+            "default": 0
+          },
+          "secrets_found": {
+            "type": "integer",
+            "title": "Secrets Found",
+            "default": 0
+          },
+          "score": {
+            "type": "number",
+            "title": "Score",
+            "description": "Composite risk score 0-100",
+            "default": 0.0
+          }
+        },
+        "type": "object",
+        "title": "RiskSummaryResponse"
+      },
+      "ScopeResponse": {
+        "properties": {
+          "target_host": {
+            "type": "string",
+            "title": "Target Host"
+          },
+          "include_patterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Include Patterns"
+          },
+          "exclude_patterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Exclude Patterns"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_host"
+        ],
+        "title": "ScopeResponse"
+      },
+      "ScopeUpdateRequest": {
+        "properties": {
+          "add_include_patterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Add Include Patterns",
+            "description": "Regex patterns to add to include list"
+          },
+          "add_exclude_patterns": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Add Exclude Patterns",
+            "description": "Regex patterns to add to exclude list"
+          }
+        },
+        "type": "object",
+        "title": "ScopeUpdateRequest",
+        "description": "Add include/exclude patterns to the crawl scope."
+      },
+      "SecretResponse": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "description": "Secret type: api_key, token, password, etc."
+          },
+          "value": {
+            "type": "string",
+            "title": "Value",
+            "description": "The secret value"
+          },
+          "source_url": {
+            "type": "string",
+            "title": "Source Url"
+          },
+          "entropy": {
+            "type": "number",
+            "title": "Entropy",
+            "default": 0.0
+          },
+          "risk_indicators": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Risk Indicators"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "value",
+          "source_url"
+        ],
+        "title": "SecretResponse"
+      },
+      "SessionInjectRequest": {
+        "properties": {
+          "role": {
+            "type": "string",
+            "title": "Role",
+            "description": "Auth role name",
+            "default": "default"
+          },
+          "cookies": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Cookies",
+            "description": "Cookies to inject"
+          },
+          "headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Headers",
+            "description": "Headers to inject (e.g. Authorization)"
+          },
+          "token": {
+            "type": "string",
+            "title": "Token",
+            "description": "Bearer token to inject as Authorization header",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "SessionInjectRequest",
+        "description": "Inject authentication session data."
+      },
+      "TechFingerprintResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version",
+            "default": ""
+          },
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "description": "Category: framework, server, cms, frontend, waf",
+            "default": ""
+          },
+          "confidence": {
+            "type": "number",
+            "title": "Confidence",
+            "description": "Detection confidence 0.0-1.0",
+            "default": 0.0
+          },
+          "evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "implied_paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Implied Paths",
+            "description": "Paths implied by this technology"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "TechFingerprintResponse"
+      },
+      "TransactionDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "timestamp": {
+            "type": "number",
+            "title": "Timestamp"
+          },
+          "request_method": {
+            "type": "string",
+            "title": "Request Method"
+          },
+          "request_url": {
+            "type": "string",
+            "title": "Request Url"
+          },
+          "request_headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Request Headers"
+          },
+          "request_body_size": {
+            "type": "integer",
+            "title": "Request Body Size",
+            "default": 0
+          },
+          "request_content_type": {
+            "type": "string",
+            "title": "Request Content Type",
+            "default": ""
+          },
+          "response_status": {
+            "type": "integer",
+            "title": "Response Status"
+          },
+          "response_headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Response Headers"
+          },
+          "response_body_size": {
+            "type": "integer",
+            "title": "Response Body Size",
+            "default": 0
+          },
+          "response_content_type": {
+            "type": "string",
+            "title": "Response Content Type",
+            "default": ""
+          },
+          "response_url_final": {
+            "type": "string",
+            "title": "Response Url Final",
+            "default": ""
+          },
+          "source_module": {
+            "type": "string",
+            "title": "Source Module",
+            "default": ""
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth",
+            "default": 0
+          },
+          "page_type": {
+            "type": "string",
+            "title": "Page Type",
+            "default": ""
+          },
+          "content_hash": {
+            "type": "string",
+            "title": "Content Hash",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "timestamp",
+          "request_method",
+          "request_url",
+          "response_status"
+        ],
+        "title": "TransactionDetail",
+        "description": "Full HTTP transaction with headers and body sizes."
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}

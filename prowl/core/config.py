@@ -5,6 +5,28 @@ from __future__ import annotations
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+# Common noise URL patterns: marketing, static assets, tracking params.
+# Applied automatically when noise_filter=True.
+BUILTIN_NOISE_PATTERNS: list[str] = [
+    r".*/blog/.*",
+    r".*/careers/.*",
+    r".*/press/.*",
+    r".*/customer-stories/.*",
+    r".*/events/.*",
+    r".*/newsletter/.*",
+    r".*/podcast/.*",
+    r".*/webinar/.*",
+    r".*/cdn-cgi/.*",
+    r".*/static/.*",
+    r".*/assets/.*",
+    r".*/_next/static/.*",
+    r".*/_next/image/.*",
+    r".*/wp-content/uploads/.*",
+    r".*\?utm_.*",
+    r".*\?fbclid=.*",
+    r".*\?gclid=.*",
+]
+
 
 class CrawlConfig(BaseSettings):
     """Main configuration for a crawl session."""
@@ -77,6 +99,9 @@ class CrawlConfig(BaseSettings):
     graphql_introspection_depth: int = 3
     graphql_extract_input_types: bool = True
 
+    # Approval guardrail
+    approve_unsafe: bool = True  # require user approval for POST/PUT/DELETE/PATCH
+
     # Exploration strategy
     coverage_guided: bool = True
     seed_scheduling: bool = True
@@ -91,6 +116,17 @@ class CrawlConfig(BaseSettings):
     # Infrastructure mapping
     infra_mapping_enabled: bool = True
     infra_dns_lookup: bool = True
+
+    # Noise filter
+    noise_filter: bool = True
+    noise_patterns: list[str] = Field(default_factory=list)
+
+    # Auto-merge rules: template_pattern -> max_per_template
+    auto_merge_rules: dict[str, int] = Field(default_factory=dict)
+
+    # Focus patterns: URL substrings to boost priority
+    focus_patterns: list[str] = Field(default_factory=list)
+    focus_boost: int = 10
 
     # Passive
     use_wayback: bool = True

@@ -33,7 +33,7 @@ class MarkdownOutput:
             f"# Prowl Crawl Report",
             "",
             f"**Target:** {r.target if r else 'N/A'}",
-            f"**Duration:** {r.duration_seconds:.1f}s" if r else "",
+            f"**Duration:** {r.scan_duration:.1f}s" if r else "",
             f"**Endpoints:** {len(self._endpoints)}",
             f"**Secrets:** {len(self._secrets)}",
             "",

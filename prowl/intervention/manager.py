@@ -1,4 +1,4 @@
-"""Intervention manager — handles pause/resume for human interaction."""
+"""Intervention manager - handles pause/resume for human interaction."""
 
 from __future__ import annotations
 

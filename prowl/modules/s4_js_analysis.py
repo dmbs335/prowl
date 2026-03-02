@@ -1,4 +1,4 @@
-"""§4 JavaScript Analysis — tree-sitter AST-based endpoint and parameter extraction.
+"""§4 JavaScript Analysis - tree-sitter AST-based endpoint and parameter extraction.
 
 Replaces the regex-only approach with proper AST parsing for accurate extraction
 of endpoints, HTTP methods, body fields, route definitions, and secrets from JS.
@@ -8,6 +8,7 @@ Falls back to regex for inline patterns that AST may miss.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urljoin
@@ -136,12 +137,32 @@ class JSASTAnalyzer:
         secrets: list[Secret] = []
         seen: set[str] = set()
 
+        # Pattern-based first: AWS keys, JWTs (specific kind takes priority)
+        text = source_bytes.decode("utf-8", errors="replace")
+        for pattern, kind in _SECRET_PATTERNS:
+            for match in pattern.finditer(text):
+                val = match.group(0)
+                if val not in seen:
+                    seen.add(val)
+                    secrets.append(Secret(
+                        kind=kind,
+                        value=val[:200],
+                        source_url=source_url,
+                    ))
+
         # AST-based: find assignments where LHS name is secret-like
         for node in self._walk(tree.root_node):
             if node.type in ("variable_declarator", "assignment_expression", "pair"):
                 name_node, value_node = self._get_assignment_parts(node)
                 if not name_node or not value_node:
                     continue
+
+                # Handle bracket notation: config['api_key'] = ...
+                if name_node.type == "subscript_expression":
+                    for child in name_node.children:
+                        if child.type == "string":
+                            name_node = child
+                            break
 
                 var_name = self._node_text(name_node, source_bytes).lower().strip("'\"` ")
                 if var_name not in _SECRET_VAR_NAMES:
@@ -157,19 +178,6 @@ class JSASTAnalyzer:
                             source_url=source_url,
                             line=value_node.start_point[0] + 1,
                         ))
-
-        # Pattern-based: AWS keys, JWTs in any string
-        text = source_bytes.decode("utf-8", errors="replace")
-        for pattern, kind in _SECRET_PATTERNS:
-            for match in pattern.finditer(text):
-                val = match.group(0)
-                if val not in seen:
-                    seen.add(val)
-                    secrets.append(Secret(
-                        kind=kind,
-                        value=val[:200],
-                        source_url=source_url,
-                    ))
 
         return secrets
 
@@ -299,7 +307,7 @@ class JSASTAnalyzer:
         method = _METHOD_MAP.get(method_name.lower(), "GET")
         params: list[Parameter] = []
 
-        # axios.post(url, data) — second arg is body
+        # axios.post(url, data) - second arg is body
         if len(args) >= 2 and args[1].type == "object" and method in ("POST", "PUT", "PATCH"):
             params = self._extract_body_params(args[1], source)
 
@@ -389,7 +397,8 @@ class JSASTAnalyzer:
         for node in self._walk(root):
             # React Router: <Route path="/dashboard" ...>
             if node.type == "jsx_self_closing_element" or node.type == "jsx_opening_element":
-                tag_node = node.child(0) if node.child_count > 0 else None
+                # child(0) is '<' token, child(1) is the tag identifier
+                tag_node = node.child(1) if node.child_count > 1 else None
                 # Look for tag name containing "Route"
                 if tag_node:
                     tag_text = self._node_text(tag_node, source)
@@ -423,23 +432,28 @@ class JSASTAnalyzer:
     # AST helpers
     # ------------------------------------------------------------------
 
-    def _walk(self, node: Node) -> list[Node]:
-        """Pre-order traversal of the AST."""
-        result: list[Node] = []
+    def _walk(self, node: Node) -> Iterator[Node]:
+        """Pre-order traversal of the AST (lazy generator)."""
         stack = [node]
         while stack:
             current = stack.pop()
-            result.append(current)
+            yield current
             # Push children in reverse so leftmost is processed first
             for i in range(current.child_count - 1, -1, -1):
                 child = current.child(i)
                 if child:
                     stack.append(child)
-        return result
 
     def _node_text(self, node: Node, source: bytes) -> str:
         """Get the source text for a node."""
         return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _decode_js_escapes(s: str) -> str:
+        """Decode JS hex (\\x41) and unicode (\\u0041) escape sequences."""
+        s = re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), s)
+        s = re.sub(r"\\u([0-9a-fA-F]{4})", lambda m: chr(int(m.group(1), 16)), s)
+        return s
 
     def _extract_string_value(self, node: Node, source: bytes) -> str:
         """Extract the content of a string/template_string node (strips quotes)."""
@@ -447,12 +461,19 @@ class JSASTAnalyzer:
         if node.type == "string":
             # Remove surrounding quotes
             if len(text) >= 2 and text[0] in "'\"`" and text[-1] == text[0]:
-                return text[1:-1]
-            return text
+                inner = text[1:-1]
+            else:
+                inner = text
+            # Decode \x and \u escapes
+            if "\\" in inner:
+                inner = self._decode_js_escapes(inner)
+            return inner
         elif node.type == "template_string":
             # Remove backticks, replace ${...} with {param}
             inner = text.strip("`")
             inner = re.sub(r"\$\{(\w+)\}", r"{\1}", inner)
+            if "\\" in inner:
+                inner = self._decode_js_escapes(inner)
             return inner
         return text
 

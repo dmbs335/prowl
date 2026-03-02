@@ -4,11 +4,24 @@ from __future__ import annotations
 
 import hashlib
 from enum import auto
+from urllib.parse import urlparse, urlunparse
 
 from prowl._compat import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+
+def normalize_url(url: str) -> str:
+    """Strip fragments and clean empty/trailing query noise from URL.
+
+    - ``#fragment`` removed
+    - Trailing ``&`` stripped
+    - Empty queries (``?``, ``?&``, ``?&&``) removed entirely
+    """
+    parsed = urlparse(url)
+    query = parsed.query.rstrip("&").strip()
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, ""))
 
 
 class HttpMethod(StrEnum):
@@ -38,7 +51,7 @@ class CrawlRequest(BaseModel):
     @property
     def fingerprint(self) -> str:
         """URL + method + body hash + auth_role fingerprint for dedup."""
-        raw = f"{self.method.upper()}|{self.url}"
+        raw = f"{self.method.upper()}|{normalize_url(self.url)}"
         if self.body and self.method.upper() in ("POST", "PUT", "PATCH"):
             body_hash = hashlib.sha256(self.body).hexdigest()[:8]
             raw += f"|{body_hash}"
@@ -89,9 +102,10 @@ class CrawlResponse(BaseModel):
     links: list[LinkData] = Field(default_factory=list)
     forms: list[FormData] = Field(default_factory=list)
     js_files: list[str] = Field(default_factory=list)
+    resource_urls: list[str] = Field(default_factory=list)
     rendered_dom: str | None = None
 
-    # Discovery context — populated by DiscoveryEngine after each response
+    # Discovery context - populated by DiscoveryEngine after each response
     page_type: str = ""  # real_content, custom_404, waf_block, error, redirect, auth_required
     tech_indicators: list[str] = Field(default_factory=list)
 

@@ -307,7 +307,7 @@ class TransactionStore:
             await self._db.close()
             self._db = None
             logger.info(
-                "TransactionStore closed — %d transactions stored", self._total_stored
+                "TransactionStore closed - %d transactions stored", self._total_stored
             )
 
     @staticmethod

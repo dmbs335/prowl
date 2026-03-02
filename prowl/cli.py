@@ -1,4 +1,4 @@
-"""Prowl CLI — Typer-based command line interface."""
+"""Prowl CLI - Typer-based command line interface."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from prowl import __version__
 
 app = typer.Typer(
     name="prowl",
-    help="Prowl — Security Reconnaissance Crawler",
+    help="Prowl - Security Reconnaissance Crawler",
     no_args_is_help=True,
 )
 console = Console()
@@ -29,6 +29,9 @@ def setup_logging(verbose: bool = False) -> None:
         format="%(message)s",
         handlers=[RichHandler(console=console, show_time=False, show_path=False)],
     )
+    # Silence noisy third-party loggers even in verbose mode
+    for name in ("httpx", "httpcore", "hpack", "h2", "h11"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 @app.command()
@@ -42,7 +45,7 @@ def crawl(
     timeout: float = typer.Option(30.0, "--timeout", help="Request timeout (seconds)"),
     output_dir: str = typer.Option("./prowl-output", "--output", "-o", help="Output directory"),
     output_format: Optional[str] = typer.Option(
-        "json,markdown", "--format", "-f", help="Output formats (comma-separated)"
+        "json,markdown", "--format", "-f", help="Output formats: json,markdown,html,burp,postman,openapi"
     ),
     dashboard: bool = typer.Option(False, "--dashboard", help="Enable web dashboard"),
     dashboard_port: int = typer.Option(8484, "--dashboard-port", help="Dashboard port"),
@@ -54,6 +57,16 @@ def crawl(
     delay: float = typer.Option(0.0, "--delay", help="Delay between requests (seconds)"),
     wordlist_dirs: Optional[str] = typer.Option(None, "--wordlist-dirs", help="Directory wordlist file"),
     wordlist_params: Optional[str] = typer.Option(None, "--wordlist-params", help="Parameter wordlist file"),
+    auth_user: Optional[str] = typer.Option(None, "--auth-user", "-u", help="Auth username for login"),
+    auth_pass: Optional[str] = typer.Option(None, "--auth-pass", help="Auth password for login"),
+    login_url: Optional[str] = typer.Option(None, "--login-url", help="Login form URL (absolute or relative)"),
+    auth_request: Optional[str] = typer.Option(None, "--auth-request", help="Raw HTTP request file for auth (Burp/devtools format)"),
+    approve_unsafe: bool = typer.Option(True, "--approve-unsafe/--no-approve-unsafe", help="Require approval for POST/PUT/DELETE/PATCH"),
+    noise_filter: bool = typer.Option(True, "--noise-filter/--no-noise-filter", help="Builtin noise pattern filtering"),
+    noise_pattern: Optional[list[str]] = typer.Option(None, "--noise-pattern", help="Additional noise regex patterns to exclude"),
+    auto_merge: Optional[list[str]] = typer.Option(None, "--auto-merge", help="Auto-merge rule: 'pattern:max' (e.g. '/blog/*:3')"),
+    focus: Optional[list[str]] = typer.Option(None, "--focus", help="URL substring patterns to boost priority"),
+    focus_boost: int = typer.Option(10, "--focus-boost", help="Priority boost for focus patterns"),
     llm_model: Optional[str] = typer.Option(None, "--llm-model", help="LLM model (e.g., gpt-4o-mini)"),
     llm_api_key: Optional[str] = typer.Option(None, "--llm-api-key", help="LLM API key"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
@@ -62,6 +75,35 @@ def crawl(
     setup_logging(verbose)
 
     from prowl.core.config import CrawlConfig
+
+    # Build auth roles from CLI options
+    auth_roles: list[dict] = []
+    if auth_request:
+        auth_roles.append({
+            "name": "raw_request",
+            "raw_request_file": auth_request,
+        })
+    if auth_user:
+        resolved_login = login_url or f"{target.rstrip('/')}/login"
+        auth_roles.append({
+            "name": "cli_user",
+            "username": auth_user,
+            "password": auth_pass or "",
+            "login_url": resolved_login,
+        })
+
+    # Parse auto-merge rules: "pattern:max" -> {pattern: max}
+    auto_merge_rules: dict[str, int] = {}
+    if auto_merge:
+        for rule in auto_merge:
+            if ":" in rule:
+                pat, count_str = rule.rsplit(":", 1)
+                try:
+                    auto_merge_rules[pat] = int(count_str)
+                except ValueError:
+                    console.print(f"[yellow]Warning:[/] Invalid auto-merge rule '{rule}', expected 'pattern:max'")
+            else:
+                console.print(f"[yellow]Warning:[/] Invalid auto-merge rule '{rule}', expected 'pattern:max'")
 
     config = CrawlConfig(
         target_url=target,
@@ -79,6 +121,13 @@ def crawl(
         request_delay=delay,
         wordlist_dirs=wordlist_dirs or "",
         wordlist_params=wordlist_params or "",
+        auth_roles=auth_roles,
+        approve_unsafe=approve_unsafe,
+        noise_filter=noise_filter,
+        noise_patterns=noise_pattern or [],
+        auto_merge_rules=auto_merge_rules,
+        focus_patterns=focus or [],
+        focus_boost=focus_boost,
         llm_model=llm_model or "",
         llm_api_key=llm_api_key or "",
     )
@@ -99,14 +148,38 @@ async def _run_crawl(
     from prowl.intervention.manager import InterventionManager
     from prowl.pipeline.orchestrator import PipelineOrchestrator
 
+    from prowl.playbook.engine import PlaybookEngine
+
     engine = CrawlEngine(config)
+    playbook = PlaybookEngine(engine)
+    playbook.connect()
+    engine._playbook = playbook  # Expose for API access
     intervention_mgr = InterventionManager(engine.signals)
     dashboard_state = DashboardState()
     bridge = DashboardBridge(engine.signals, dashboard_state)
 
+    # Approval guardrail for unsafe methods
+    approval_mgr = None
+    if config.approve_unsafe:
+        from prowl.intervention.approval import ApprovalManager
+
+        approval_mgr = ApprovalManager(engine.signals)
+        engine.set_approval_manager(approval_mgr)
+
+        # Re-submit approved requests back into the queue
+        async def _on_approval_resolved(**kwargs):
+            action = kwargs.get("action")
+            request = kwargs.get("request")
+            if action == "approved" and request:
+                await engine.submit(request)
+
+        engine.signals.connect(Signal.APPROVAL_RESOLVED, _on_approval_resolved)
+
     console.print(f"\n[bold blue]Prowl[/] v{__version__}")
     console.print(f"Target: [cyan]{config.target_url}[/]")
     console.print(f"Backend: {config.backend} | Concurrency: {config.concurrency}")
+    if config.approve_unsafe:
+        console.print("[yellow]Approval:[/] POST/PUT/DELETE/PATCH require user consent")
     if config.modules:
         console.print(f"Modules: {', '.join(config.modules)}")
     console.print()
@@ -120,7 +193,10 @@ async def _run_crawl(
         from prowl.dashboard.server import start_dashboard
 
         dashboard_task = asyncio.create_task(
-            start_dashboard(engine, dashboard_state, bridge, intervention_mgr, config.dashboard_port)
+            start_dashboard(
+                engine, dashboard_state, bridge, intervention_mgr,
+                config.dashboard_port, approval_manager=approval_mgr,
+            )
         )
         console.print(
             f"[green]Dashboard:[/] http://127.0.0.1:{config.dashboard_port}"
@@ -132,7 +208,7 @@ async def _run_crawl(
     if interactive:
         from prowl.intervention.interactive import InteractiveSession
 
-        session = InteractiveSession(engine, intervention_mgr)
+        session = InteractiveSession(engine, intervention_mgr, approval_mgr)
         interactive_task = asyncio.create_task(session.run())
 
     # Pause engine when intervention requested (if pause_on_auth)
@@ -150,7 +226,7 @@ async def _run_crawl(
 
     try:
         await orchestrator.run()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         console.print("\n[yellow]Interrupted.[/]")
     finally:
         elapsed = time.time() - start
@@ -172,6 +248,11 @@ async def _run_crawl(
     console.print(f"  Requests: {engine.requests_completed} ({engine.requests_failed} failed)")
     console.print(f"  Output: {config.output_dir}/")
 
+    # Playbook summary
+    pb_result = playbook.get_result()
+    if pb_result.findings:
+        _print_playbook_summary(pb_result)
+
 
 async def _write_output(
     config: CrawlConfig,
@@ -180,9 +261,9 @@ async def _write_output(
     elapsed: float,
 ) -> None:
     """Write output in all configured formats."""
-    from prowl.models.report import CrawlReport, ModuleReport
+    from prowl.models.report import ModuleReport
 
-    # Build report
+    # Build module reports with per-module timing
     module_reports = []
     for name, stats in orchestrator.get_module_stats().items():
         module_reports.append(
@@ -191,17 +272,17 @@ async def _write_output(
                 endpoints_found=stats.get("endpoints_found", 0),
                 requests_made=stats.get("requests_made", 0),
                 errors=stats.get("errors", 0),
+                duration_seconds=stats.get("duration_seconds", 0.0),
             )
         )
 
-    report = CrawlReport(
+    # Use attack_surface.build_report() to include ALL data
+    # (tech_stack, auth_boundaries, secrets, input_vectors, risk_summary)
+    report = engine.attack_surface.build_report(
         target=config.target_url,
-        start_time=engine.start_time,
-        end_time=time.time(),
-        duration_seconds=elapsed,
-        endpoints=engine.discovered_endpoints,
-        module_reports=module_reports,
+        scan_duration=elapsed,
     )
+    report.module_reports = module_reports
 
     formats = config.output_formats
 
@@ -232,6 +313,163 @@ async def _write_output(
         for ep in engine.discovered_endpoints:
             await out.write_endpoint(ep)
         await out.finalize(report)
+
+    if "postman" in formats:
+        from prowl.output.postman_output import PostmanOutput
+        out = PostmanOutput(config.output_dir)
+        for ep in engine.discovered_endpoints:
+            await out.write_endpoint(ep)
+        await out.finalize(report)
+
+    if "openapi" in formats:
+        from prowl.output.openapi_output import OpenAPIOutput
+        out = OpenAPIOutput(config.output_dir)
+        for ep in engine.discovered_endpoints:
+            await out.write_endpoint(ep)
+        await out.finalize(report)
+
+
+def _print_playbook_summary(result: Any) -> None:
+    """Print playbook results to console."""
+    from rich.table import Table
+
+    s = result.summary
+    fail_n, warn_n, info_n = s.get("fail", 0), s.get("warn", 0), s.get("info", 0)
+
+    header_parts = []
+    if fail_n:
+        header_parts.append(f"[bold red]{fail_n} FAIL[/]")
+    if warn_n:
+        header_parts.append(f"[yellow]{warn_n} WARN[/]")
+    if info_n:
+        header_parts.append(f"[dim]{info_n} INFO[/]")
+
+    console.print(f"\n[bold]Playbook[/]  {', '.join(header_parts)}  "
+                  f"({result.plays_run} plays across {len(result.phases_checked)} phases)")
+
+    # Show FAIL and WARN findings
+    table = Table(show_header=True, header_style="bold", expand=True, pad_edge=False)
+    table.add_column("Sev", width=4, no_wrap=True)
+    table.add_column("Play", width=16, no_wrap=True)
+    table.add_column("Finding", ratio=1)
+
+    for f in result.findings:
+        if f.severity == "info":
+            continue
+        sev_style = "bold red" if f.severity == "fail" else "yellow"
+        sev_label = "FAIL" if f.severity == "fail" else "WARN"
+        detail = f.detail[:120] + "..." if len(f.detail) > 120 else f.detail
+        action_note = f" [dim]>> {f.auto_action}[/]" if f.auto_action else ""
+        table.add_row(
+            f"[{sev_style}]{sev_label}[/]",
+            f.play,
+            f"[bold]{f.title}[/]\n{detail}{action_note}",
+        )
+
+    if table.row_count > 0:
+        console.print(table)
+
+    # Show hints
+    if result.hints:
+        console.print("\n[bold]Next crawl hints:[/]")
+        for h in result.hints:
+            console.print(f"  [{h.action}] {h.description}")
+
+
+@app.command()
+def playbook(
+    output_dir: str = typer.Argument(..., help="Crawl output directory"),
+    format_out: str = typer.Option("console", "--format", "-f", help="Output: console, json"),
+) -> None:
+    """Run playbook analysis on completed crawl output."""
+    import json as json_mod
+    from pathlib import Path
+
+    setup_logging(False)
+
+    report_path = Path(output_dir) / "report.json"
+    if not report_path.exists():
+        console.print(f"[red]Error:[/] {report_path} not found")
+        raise typer.Exit(1)
+
+    asyncio.run(_run_playbook_standalone(output_dir, format_out))
+
+
+async def _run_playbook_standalone(output_dir: str, format_out: str) -> None:
+    """Run playbook on saved crawl output (post-hoc analysis)."""
+    import json as json_mod
+    from pathlib import Path
+
+    from prowl.api.schemas import PlaybookFinding
+    from prowl.models.report import AttackSurfaceReport
+
+    report_path = Path(output_dir) / "report.json"
+    with open(report_path, "r", encoding="utf-8") as f:
+        report_data = json_mod.load(f)
+
+    report = AttackSurfaceReport(**report_data)
+
+    # Build a minimal set of findings from the static report
+    findings: list[PlaybookFinding] = []
+
+    # P1: Completeness from report
+    ep_count = len(report.endpoints)
+    if ep_count < 5:
+        findings.append(PlaybookFinding(
+            play="P1_completeness", severity="fail",
+            title="Very few endpoints in report",
+            detail=f"Only {ep_count} endpoints in saved report.",
+            evidence={"endpoints": ep_count},
+        ))
+    else:
+        findings.append(PlaybookFinding(
+            play="P1_completeness", severity="info",
+            title=f"{ep_count} endpoints in report",
+            detail="Completeness check passed.",
+        ))
+
+    # P4: Input vector quality from report
+    iv_count = len(report.input_vectors)
+    high_risk = [iv for iv in report.input_vectors if iv.risk_indicators]
+    findings.append(PlaybookFinding(
+        play="P4_input_vectors", severity="info",
+        title=f"{iv_count} input vectors, {len(high_risk)} high-risk",
+        detail=f"Risk summary score: {report.risk_summary.score:.0f}/100",
+        evidence={"vectors": iv_count, "high_risk": len(high_risk), "score": report.risk_summary.score},
+    ))
+
+    # P7: Secret validation from report
+    false_kw = {"test", "example", "placeholder", "xxx", "dummy", "sample", "demo"}
+    suspect_secrets = [s for s in report.secrets if any(k in s.value.lower() for k in false_kw)]
+    if suspect_secrets:
+        findings.append(PlaybookFinding(
+            play="P7_secrets", severity="warn",
+            title=f"{len(suspect_secrets)} likely false positive secrets",
+            detail="Secrets containing test/example/placeholder values.",
+            evidence={"count": len(suspect_secrets)},
+        ))
+
+    from prowl.api.schemas import PlaybookResult, NextCrawlHint
+    import time
+
+    result = PlaybookResult(
+        target=report.target,
+        timestamp=time.time(),
+        plays_run=len(findings),
+        findings=findings,
+        hints=[],
+        summary={
+            "info": sum(1 for f in findings if f.severity == "info"),
+            "warn": sum(1 for f in findings if f.severity == "warn"),
+            "fail": sum(1 for f in findings if f.severity == "fail"),
+        },
+        phases_checked=["static_analysis"],
+    )
+
+    if format_out == "json":
+        console.print(result.model_dump_json(indent=2))
+    else:
+        _print_playbook_summary(result)
 
 
 @app.command()

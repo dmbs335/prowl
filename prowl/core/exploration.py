@@ -1,9 +1,9 @@
 """Coverage-guided exploration strategies inspired by fuzzing, symbolic execution, and RL.
 
-CoverageBitmap      — AFL-style coverage tracking for web endpoints
-SeedScheduler       — Priority scoring for exploration requests
-URLTemplateInferrer — Concolic URL template inference and mutation (discovery only)
-HindsightFeedback   — Learn from "failed" requests (403, 405, 500, redirects)
+CoverageBitmap      - AFL-style coverage tracking for web endpoints
+SeedScheduler       - Priority scoring for exploration requests
+URLTemplateInferrer - Concolic URL template inference and mutation (discovery only)
+HindsightFeedback   - Learn from "failed" requests (403, 405, 500, redirects)
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import hashlib
 import logging
 import random
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlparse
@@ -43,7 +43,7 @@ class CoverageBitmap:
         self._corpus: list[dict[str, Any]] = []  # Interesting requests/responses
         self._total_checked: int = 0
         # Saturation detection (sliding window)
-        self._sat_window: list[bool] = []
+        self._sat_window: deque[bool] = deque(maxlen=saturation_window)
         self._sat_window_size: int = saturation_window
         self._sat_threshold: float = saturation_threshold
 
@@ -86,10 +86,8 @@ class CoverageBitmap:
                 "auth_role": auth_role or "",
             })
 
-        # Update saturation window
+        # Update saturation window (deque maxlen auto-evicts oldest)
         self._sat_window.append(is_new)
-        if len(self._sat_window) > self._sat_window_size:
-            self._sat_window.pop(0)
 
         return is_new
 
@@ -178,7 +176,7 @@ class SeedScheduler:
     Priority = heuristic_score + sample(Beta(α, β)) * 10.
 
     Cold-start: heuristic dominates (security patterns, rare-edge bonus).
-    Data accumulates: Thompson dominates — no hyperparameter tuning needed.
+    Data accumulates: Thompson dominates - no hyperparameter tuning needed.
     (Validated: T-Scheduler, AsiaCCS 2024)
     """
 
@@ -215,7 +213,7 @@ class SeedScheduler:
         template = CoverageBitmap._normalize_to_template(url)
         hit_count = self._endpoint_hit_count.get(template, 0)
         if hit_count == 0:
-            score += 8.0  # never visited — highest bonus
+            score += 8.0  # never visited - highest bonus
         elif hit_count < 3:
             score += 4.0
         else:
@@ -235,7 +233,7 @@ class SeedScheduler:
             score += 3.0
 
         # ── Thompson Sampling component (dominates with data) ──
-        # Sample from Beta posterior — templates that produced new coverage
+        # Sample from Beta posterior - templates that produced new coverage
         # get higher samples on average, steering exploration toward them.
         alpha = self._ts_alpha[template]
         beta = self._ts_beta[template]
@@ -347,7 +345,7 @@ class URLTemplateInferrer:
     def generate_mutations(self, template: PathTemplate) -> list[str]:
         """Generate discovery-only URL mutations from a template.
 
-        NEVER generates attack payloads — only:
+        NEVER generates attack payloads - only:
         - Boundary values (0, -1, 999999)
         - Semantic variants (me, self, admin)
         - Version variants (v1 → v2, v3)

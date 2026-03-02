@@ -60,6 +60,10 @@ class Signal(StrEnum):
     INTERVENTION_REQUESTED = auto()
     INTERVENTION_RESOLVED = auto()
 
+    # Approval (unsafe-method / auth guardrail)
+    APPROVAL_REQUESTED = auto()
+    APPROVAL_RESOLVED = auto()
+
     # Transaction persistence
     TRANSACTION_STORED = auto()
 
@@ -81,6 +85,11 @@ class Signal(StrEnum):
 
     # Stats
     STATS_UPDATE = auto()
+
+    # Orchestration events
+    QUEUE_MERGED = auto()
+    AUTH_LOGIN_ATTEMPTED = auto()
+    STRATEGY_ADJUSTED = auto()
 
 
 class SignalBus:

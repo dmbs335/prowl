@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from prowl.core.engine import CrawlEngine
     from prowl.dashboard.bridge import DashboardBridge
     from prowl.dashboard.state import DashboardState
+    from prowl.intervention.approval import ApprovalManager
     from prowl.intervention.manager import InterventionManager
 
 
@@ -30,6 +31,7 @@ def create_app(
     state: DashboardState,
     bridge: DashboardBridge,
     intervention_manager: InterventionManager,
+    approval_manager: ApprovalManager | None = None,
 ) -> Any:
     """Create the FastAPI app with all routes."""
     if not HAS_FASTAPI:
@@ -37,14 +39,20 @@ def create_app(
             "FastAPI not installed. Install with: pip install prowl[dashboard]"
         )
 
-    app = FastAPI(title="Prowl Dashboard", version="0.1.0")
+    app = FastAPI(
+        title="Prowl",
+        version="0.1.0",
+        description="Prowl Security Crawler - Dashboard & LLM Orchestration API",
+    )
 
     # --- REST API ---
 
     @app.get("/api/status")
     async def get_status() -> dict:
         stats = engine.get_stats()
-        stats["elapsed"] = engine.elapsed
+        stats["target"] = engine.config.target_url
+        stats["phase_name"] = state.phase_name
+        stats["current_phase"] = state.current_phase
         return stats
 
     @app.get("/api/modules")
@@ -62,6 +70,10 @@ def create_app(
         total = len(state.endpoints)
         items = state.endpoints[offset : offset + limit]
         return {"total": total, "items": items}
+
+    @app.get("/api/graph")
+    async def get_graph(limit: int = 500) -> dict:
+        return state.build_graph(limit)
 
     @app.get("/api/interventions")
     async def get_interventions() -> list:
@@ -109,6 +121,45 @@ def create_app(
     async def get_stats() -> dict:
         return state.stats
 
+    # --- Approval guardrail API ---
+
+    @app.get("/api/approvals")
+    async def get_approvals() -> list:
+        if not approval_manager:
+            return []
+        return approval_manager.get_all()
+
+    @app.post("/api/approvals/{item_id}/approve")
+    async def approve_request(item_id: str) -> dict:
+        if not approval_manager:
+            return JSONResponse(status_code=404, content={"error": "Approval not enabled"})
+        req = await approval_manager.approve(item_id)
+        if req:
+            return {"status": "approved", "url": req.url, "method": req.method.upper()}
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Item not found or already resolved"},
+        )
+
+    @app.post("/api/approvals/{item_id}/reject")
+    async def reject_request(item_id: str) -> dict:
+        if not approval_manager:
+            return JSONResponse(status_code=404, content={"error": "Approval not enabled"})
+        success = await approval_manager.reject(item_id)
+        if success:
+            return {"status": "rejected"}
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Item not found or already resolved"},
+        )
+
+    @app.post("/api/approvals/approve-all")
+    async def approve_all_requests() -> dict:
+        if not approval_manager:
+            return JSONResponse(status_code=404, content={"error": "Approval not enabled"})
+        approved = await approval_manager.approve_all()
+        return {"status": "approved_all", "count": len(approved)}
+
     # --- WebSocket ---
 
     @app.websocket("/ws")
@@ -121,10 +172,18 @@ def create_app(
         try:
             await ws.send_json({
                 "type": "initial_state",
+                "target": engine.config.target_url,
                 "modules": state.module_states,
-                "stats": state.stats,
+                "stats": {**state.stats, **engine.get_stats()},
+                "endpoints": state.endpoints[-200:],
                 "endpoint_count": len(state.endpoints),
-                "logs": state.logs[-20:],
+                "logs": state.logs[-50:],
+                "phase_name": state.phase_name,
+                "current_phase": state.current_phase,
+                "tech_stack": state.tech_stack,
+                "input_vectors": state.input_vectors[-200:],
+                "auth_boundaries": state.auth_boundaries,
+                "approval_items": approval_manager.get_all() if approval_manager else [],
             })
 
             # Keep connection alive
@@ -137,6 +196,24 @@ def create_app(
         finally:
             bridge.remove_client(ws)
             logger.info("Dashboard client disconnected")
+
+    # --- LLM Orchestration API v1 ---
+    try:
+        from prowl.api import create_v1_router
+        from prowl.api.deps import APIState, set_api_state
+
+        set_api_state(APIState(
+            engine=engine,
+            state=state,
+            bridge=bridge,
+            intervention_manager=intervention_manager,
+        ))
+
+        v1_router = create_v1_router()
+        app.include_router(v1_router, prefix="/api/v1")
+        logger.info("LLM orchestration API v1 mounted at /api/v1")
+    except ImportError:
+        logger.debug("prowl.api not available, orchestration API disabled")
 
     # --- Static files (built React app) ---
     static_dir = Path(__file__).parent.parent.parent / "dashboard-ui" / "dist"
@@ -152,6 +229,7 @@ async def start_dashboard(
     bridge: DashboardBridge,
     intervention_manager: InterventionManager,
     port: int = 8484,
+    approval_manager: ApprovalManager | None = None,
 ) -> None:
     """Start the dashboard server in the background."""
     if not HAS_FASTAPI:
@@ -161,7 +239,7 @@ async def start_dashboard(
     try:
         import uvicorn
 
-        app = create_app(engine, state, bridge, intervention_manager)
+        app = create_app(engine, state, bridge, intervention_manager, approval_manager)
         config = uvicorn.Config(
             app,
             host="127.0.0.1",

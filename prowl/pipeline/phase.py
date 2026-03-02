@@ -27,7 +27,7 @@ class Phase:
     state: PhaseState = PhaseState.PENDING
 
 
-# Default pipeline phases — coverage-guided attack surface discovery
+# Default pipeline phases - coverage-guided attack surface discovery
 DEFAULT_PHASES: list[Phase] = [
     Phase(
         name="passive",
@@ -62,9 +62,19 @@ DEFAULT_PHASES: list[Phase] = [
         depends_on=["active_crawl", "js_analysis"],
     ),
     Phase(
+        name="auth_crawl",
+        modules=["s7_auth"],
+        depends_on=["active_crawl", "fingerprinting"],
+    ),
+    Phase(
+        name="deep_crawl",
+        modules=["s1_spider"],
+        depends_on=["js_analysis", "api_discovery", "state_transitions", "auth_crawl"],
+    ),
+    Phase(
         name="param_discovery",
         modules=["s3_params"],
-        depends_on=["active_crawl", "js_analysis", "api_discovery", "state_transitions"],
+        depends_on=["deep_crawl"],
     ),
     Phase(
         name="classification",

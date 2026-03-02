@@ -1,4 +1,4 @@
-"""Browser bridge — import cookies/sessions from various sources."""
+"""Browser bridge - import cookies/sessions from various sources."""
 
 from __future__ import annotations
 

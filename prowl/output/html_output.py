@@ -55,7 +55,7 @@ class HtmlOutput:
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Prowl Report — {_esc(r.target) if r else 'N/A'}</title>
+<title>Prowl Report - {_esc(r.target) if r else 'N/A'}</title>
 <style>
 *{{margin:0;padding:0;box-sizing:border-box}}
 body{{font-family:Inter,-apple-system,sans-serif;background:#0f1117;color:#e4e5e9;padding:24px}}

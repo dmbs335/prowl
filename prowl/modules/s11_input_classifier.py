@@ -1,4 +1,4 @@
-"""Input Vector Classifier — converts discovered parameters into classified
+"""Input Vector Classifier - converts discovered parameters into classified
 InputVectors with reflection detection, type inference, and contextual
 risk scoring.
 
@@ -94,7 +94,7 @@ class InputClassifierModule(BaseModule):
     """Classifies all discovered parameters into typed, risk-scored InputVectors."""
 
     name = "s11_input"
-    description = "Input vector classifier — type inference, reflection, risk scoring"
+    description = "Input vector classifier - type inference, reflection, risk scoring"
 
     def __init__(self, engine: Any) -> None:
         super().__init__(engine)
@@ -103,6 +103,7 @@ class InputClassifierModule(BaseModule):
 
     async def run(self, **kwargs: Any) -> None:
         self._running = True
+        await self.engine.signals.emit(Signal.MODULE_STARTED, module=self.name)
         self.logger.info("Starting input vector classification")
 
         # Collect detected tech names for cross-referencing
@@ -124,7 +125,7 @@ class InputClassifierModule(BaseModule):
                 for vals in qs.values():
                     for v in vals:
                         if len(v) >= 4 and v in text:
-                            # Value appears in response body — potential reflection
+                            # Value appears in response body - potential reflection
                             pass  # handled per-parameter below
 
         # Process all endpoints
@@ -152,8 +153,11 @@ class InputClassifierModule(BaseModule):
 
         self.endpoints_found = self._classified_count
         self._running = False
+        await self.engine.signals.emit(
+            Signal.MODULE_COMPLETED, module=self.name, stats=self.get_stats()
+        )
         self.logger.info(
-            "Input classification complete — %d vectors classified, %d reflected",
+            "Input classification complete - %d vectors classified, %d reflected",
             self._classified_count, self._reflected_count,
         )
 

@@ -17,6 +17,7 @@ from prowl.models.request import (
     FormField,
     HttpMethod,
     LinkData,
+    normalize_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,12 +89,14 @@ class HttpBackend:
             forms: list[FormData] = []
             js_files: list[str] = []
 
+            resource_urls: list[str] = []
+
             if (
                 "html" in content_type
                 and response.status_code not in _SKIP_PARSE_STATUSES
             ):
                 parse_body = body[:_MAX_PARSE_BYTES] if len(body) > _MAX_PARSE_BYTES else body
-                links, forms, js_files = self._parse_html(parse_body, final_url)
+                links, forms, js_files, resource_urls = self._parse_html(parse_body, final_url)
 
             return CrawlResponse(
                 request=request,
@@ -105,6 +108,7 @@ class HttpBackend:
                 links=links,
                 forms=forms,
                 js_files=js_files,
+                resource_urls=resource_urls,
             )
 
         except httpx.TimeoutException:
@@ -120,19 +124,20 @@ class HttpBackend:
 
     def _parse_html(
         self, body: bytes, base_url: str
-    ) -> tuple[list[LinkData], list[FormData], list[str]]:
-        """Extract links, forms, and JS files from HTML using lxml."""
+    ) -> tuple[list[LinkData], list[FormData], list[str], list[str]]:
+        """Extract links, forms, JS files, and resource URLs from HTML using lxml."""
         try:
             doc = html_fromstring(body)
             doc.make_links_absolute(base_url, resolve_base_href=True)
         except Exception:
-            return [], [], []
+            return [], [], [], []
 
         links = self._extract_links(doc)
         forms = self._extract_forms(doc, base_url)
         js_files = self._extract_js(doc)
+        resource_urls = self._extract_resources(doc)
 
-        return links, forms, js_files
+        return links, forms, js_files, resource_urls
 
     def _extract_links(self, doc: etree._Element) -> list[LinkData]:
         links: list[LinkData] = []
@@ -140,6 +145,7 @@ class HttpBackend:
             href = tag.get("href", "")
             if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
                 continue
+            href = normalize_url(href)
             text = (tag.text_content() or "")[:100].strip()
             links.append(
                 LinkData(url=href, text=text, tag=tag.tag)
@@ -152,6 +158,7 @@ class HttpBackend:
             action = form.get("action", "")
             if not action:
                 action = base_url
+            action = normalize_url(action)
             method_str = form.get("method", "GET").upper()
             try:
                 method = HttpMethod(method_str.lower())
@@ -189,5 +196,18 @@ class HttpBackend:
         for script in doc.xpath("//script[@src]"):
             src = script.get("src", "")
             if src:
-                js_files.append(src)
+                js_files.append(normalize_url(src))
         return js_files
+
+    def _extract_resources(self, doc: etree._Element) -> list[str]:
+        """Extract resource URLs from img, iframe, video, audio, source, embed, object."""
+        resources: list[str] = []
+        for tag in doc.xpath(
+            "//img[@src] | //iframe[@src] | //video[@src] | //audio[@src] "
+            "| //source[@src] | //embed[@src] | //object[@data]"
+        ):
+            src = tag.get("src") or tag.get("data") or ""
+            if not src or src.startswith(("data:", "javascript:", "#")):
+                continue
+            resources.append(normalize_url(src))
+        return resources

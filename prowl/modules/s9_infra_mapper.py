@@ -1,4 +1,4 @@
-"""Infrastructure Mapper — passive analysis of collected HTTP traffic to identify
+"""Infrastructure Mapper - passive analysis of collected HTTP traffic to identify
 CDN, WAF, reverse proxy, load balancer, and server components.
 
 No additional requests are made.  All analysis is performed on data already
@@ -39,7 +39,7 @@ class InfraMapperModule(BaseModule):
     """
 
     name = "s9_infra"
-    description = "Infrastructure topology mapper — CDN, WAF, proxy, LB detection"
+    description = "Infrastructure topology mapper - CDN, WAF, proxy, LB detection"
 
     def __init__(self, engine: Any) -> None:
         super().__init__(engine)
@@ -57,6 +57,7 @@ class InfraMapperModule(BaseModule):
 
     async def run(self, **kwargs: Any) -> None:
         self._running = True
+        await self.engine.signals.emit(Signal.MODULE_STARTED, module=self.name)
         self.logger.info("Starting infrastructure mapping (passive analysis)")
 
         # Phase A-G: scan all transactions
@@ -97,10 +98,26 @@ class InfraMapperModule(BaseModule):
 
         self.endpoints_found = len(self._detections)
         self._running = False
+        await self.engine.signals.emit(
+            Signal.MODULE_COMPLETED, module=self.name, stats=self.get_stats()
+        )
         self.logger.info(
-            "Infrastructure mapping complete — %d components detected",
+            "Infrastructure mapping complete - %d components detected",
             len(self._detections),
         )
+
+    def get_stats(self) -> dict[str, Any]:
+        stats = super().get_stats()
+        by_category: dict[str, int] = {}
+        for det in self._detections.values():
+            if det.confidence >= 0.30:
+                by_category[det.category] = by_category.get(det.category, 0) + 1
+        stats["by_category"] = by_category
+        stats["cache_hits"] = self._cache_hits
+        stats["cache_misses"] = self._cache_misses
+        stats["server_variants"] = len(self._server_values)
+        stats["via_chains"] = len(self._via_chains)
+        return stats
 
     # ------------------------------------------------------------------
     # Phase B: Header analysis

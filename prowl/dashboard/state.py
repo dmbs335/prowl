@@ -20,6 +20,12 @@ class DashboardState:
             "s5_api": {"state": "pending", "stats": {}},
             "s7_auth": {"state": "pending", "stats": {}},
             "s3_params": {"state": "pending", "stats": {}},
+            "s8_states": {"state": "pending", "stats": {}},
+            "s9_infra": {"state": "pending", "stats": {}},
+            "s10_tech": {"state": "pending", "stats": {}},
+            "s11_input": {"state": "pending", "stats": {}},
+            "s12_auth": {"state": "pending", "stats": {}},
+            "s13_report": {"state": "pending", "stats": {}},
         }
         self.current_phase: int = 0
         self.phase_name: str = ""
@@ -35,6 +41,10 @@ class DashboardState:
         }
         self.logs: list[dict] = []
         self._max_logs = 200
+        self.tech_stack: list[dict] = []
+        self.input_vectors: list[dict] = []
+        self.auth_boundaries: list[dict] = []
+        self.approval_items: list[dict] = []
 
     def update_module_state(
         self, module: str, state: str, stats: dict | None = None
@@ -57,6 +67,35 @@ class DashboardState:
         self.endpoints.append(ep_dict)
         self.stats["total_endpoints"] = len(self.endpoints)
         self.stats["total_params"] += endpoint.param_count
+
+    def add_tech(self, tech: dict) -> None:
+        for existing in self.tech_stack:
+            if existing["name"].lower() == tech["name"].lower():
+                existing["confidence"] = max(existing["confidence"], tech["confidence"])
+                for ev in tech.get("evidence", []):
+                    if ev not in existing["evidence"]:
+                        existing["evidence"].append(ev)
+                return
+        self.tech_stack.append(tech)
+
+    def add_input_vector(self, iv: dict) -> None:
+        self.input_vectors.append(iv)
+
+    def add_auth_boundary(self, ab: dict) -> None:
+        for existing in self.auth_boundaries:
+            if existing["url"] == ab["url"] and existing["method"] == ab["method"]:
+                existing["access_matrix"].update(ab.get("access_matrix", {}))
+                return
+        self.auth_boundaries.append(ab)
+
+    def add_approval_item(self, item: dict) -> None:
+        self.approval_items.append(item)
+
+    def resolve_approval_item(self, item_id: str, action: str) -> None:
+        for existing in self.approval_items:
+            if existing["id"] == item_id:
+                existing["state"] = action
+                return
 
     def add_log(self, level: str, module: str, message: str, ts: float) -> None:
         entry = {"level": level, "module": module, "message": message, "ts": ts}
@@ -110,6 +149,60 @@ class DashboardState:
             "count": len(node["endpoints"])
             + sum(c.get("count", 0) for c in children),
         }
+
+    def build_graph(self, limit: int = 500) -> dict:
+        """Build a node/edge graph from discovered endpoints.
+
+        Nodes are unique URL paths.  Edges connect each path to its
+        parent directory path, producing a site-structure graph.
+        """
+        node_map: dict[str, dict] = {}
+        edges: list[dict] = []
+        edge_set: set[tuple[str, str]] = set()
+
+        for ep in self.endpoints[:limit]:
+            parsed = urlparse(ep["url"])
+            path = parsed.path or "/"
+
+            if path not in node_map:
+                node_map[path] = {
+                    "id": path,
+                    "label": path.split("/")[-1] or "/",
+                    "method": ep["method"],
+                    "status": ep.get("status_code"),
+                    "source": ep.get("source_module", ""),
+                    "params": ep.get("param_count", 0),
+                    "content_type": ep.get("content_type", ""),
+                    "depth": path.count("/"),
+                }
+            else:
+                # Merge: accumulate params, keep most interesting status
+                existing = node_map[path]
+                existing["params"] = max(existing["params"], ep.get("param_count", 0))
+
+        # Build parent edges
+        for path in node_map:
+            if path == "/":
+                continue
+            parent = "/".join(path.rstrip("/").split("/")[:-1]) or "/"
+            # Ensure parent node exists
+            if parent not in node_map:
+                node_map[parent] = {
+                    "id": parent,
+                    "label": parent.split("/")[-1] or "/",
+                    "method": "",
+                    "status": None,
+                    "source": "",
+                    "params": 0,
+                    "content_type": "",
+                    "depth": parent.count("/"),
+                }
+            key = (parent, path)
+            if key not in edge_set:
+                edge_set.add(key)
+                edges.append({"source": parent, "target": path})
+
+        return {"nodes": list(node_map.values()), "edges": edges}
 
     def get_snapshot(self) -> dict:
         """Get complete state snapshot."""

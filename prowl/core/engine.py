@@ -110,7 +110,7 @@ from prowl.core.session_pool import SessionPool
 from prowl.core.signals import Signal, SignalBus
 from prowl.core.exploration import CoverageBitmap, HindsightFeedback, SeedScheduler, URLTemplateInferrer
 from prowl.core.attack_surface import AttackSurfaceStore
-from prowl.models.request import CrawlRequest, CrawlResponse
+from prowl.models.request import CrawlRequest, CrawlResponse, normalize_url
 from prowl.models.target import Endpoint
 from prowl.store.transaction_store import HttpTransaction, TransactionStore
 
@@ -145,6 +145,15 @@ class CrawlEngine:
         self._workers: list[asyncio.Task] = []
         self._pause_event = asyncio.Event()
         self._pause_event.set()  # Not paused by default
+        self._active_requests = 0  # in-flight requests taken from queue
+
+        # Approval guardrail (set externally via set_approval_manager)
+        self._approval_manager: Any = None
+
+        # BFS color tracking: URLs that the spider has fully processed
+        # (links/forms extracted).  Anything in discovered_endpoints but NOT
+        # in this set is "white" and eligible for a deep-crawl pass.
+        self._spidered_urls: set[str] = set()
 
         # Transaction store for full HTTP traffic persistence
         self.transaction_store = TransactionStore(
@@ -225,6 +234,23 @@ class CrawlEngine:
         await self.transaction_store.initialize()
         self.signals.connect(Signal.REQUEST_COMPLETED, self._persist_transaction)
 
+        # Apply noise filter patterns to scope exclusions
+        if self.config.noise_filter:
+            from prowl.core.config import BUILTIN_NOISE_PATTERNS
+
+            for pat in BUILTIN_NOISE_PATTERNS:
+                self.scope.add_exclude_pattern(pat)
+            logger.info("Noise filter: %d builtin patterns applied", len(BUILTIN_NOISE_PATTERNS))
+
+        for pat in self.config.noise_patterns:
+            self.scope.add_exclude_pattern(pat)
+        if self.config.noise_patterns:
+            logger.info("Noise filter: %d custom patterns applied", len(self.config.noise_patterns))
+
+        # Apply auto-merge rules to queue
+        for pattern, cap in self.config.auto_merge_rules.items():
+            self.queue.add_auto_merge_rule(pattern, cap)
+
         self._state = EngineState.IDLE
         logger.info("Engine started with %s backend", backend_type)
 
@@ -260,6 +286,13 @@ class CrawlEngine:
                 source_module=request.source_module,
                 depth=request.depth,
             )
+
+        # Focus pattern boost
+        if self.config.focus_patterns:
+            for pat in self.config.focus_patterns:
+                if pat in request.url:
+                    request.priority += self.config.focus_boost
+                    break
 
         added = await self.queue.put(request)
         if added:
@@ -349,9 +382,13 @@ class CrawlEngine:
             asyncio.create_task(self._worker(i)) for i in range(n)
         ]
 
+    def set_approval_manager(self, manager: Any) -> None:
+        """Attach an ApprovalManager for unsafe-method guardrail."""
+        self._approval_manager = manager
+
     async def _worker(self, worker_id: int) -> None:
         """Worker loop: fetch from queue, execute, process response."""
-        while self._state == EngineState.RUNNING:
+        while self._state in (EngineState.RUNNING, EngineState.PAUSED):
             # Respect pause
             await self._pause_event.wait()
 
@@ -362,9 +399,19 @@ class CrawlEngine:
             except asyncio.CancelledError:
                 break
 
+            self._active_requests += 1
             try:
                 if self.requests_completed + self.requests_failed >= self.config.max_requests:
                     break
+
+                # Approval guardrail: park unsafe requests for user consent
+                if self._approval_manager is not None:
+                    from prowl.intervention.approval import ApprovalManager
+                    mgr: ApprovalManager = self._approval_manager
+                    if mgr.needs_approval(request, self.config.approve_unsafe):
+                        kind = mgr.classify(request)
+                        await mgr.submit(request, kind)
+                        continue  # skip execute, process next safe request
 
                 # Adaptive rate limiting (replaces static request_delay)
                 await self.rate_limiter.wait()
@@ -373,6 +420,7 @@ class CrawlEngine:
             except Exception:
                 logger.exception("Worker %d error processing %s", worker_id, request.url)
             finally:
+                self._active_requests -= 1
                 self.queue.task_done()
 
     async def register_endpoint(self, endpoint: Endpoint) -> None:
@@ -381,6 +429,21 @@ class CrawlEngine:
         self.attack_surface.register_endpoint(endpoint)
         self.endpoints_found += 1
         await self.signals.emit(Signal.ENDPOINT_FOUND, endpoint=endpoint)
+
+    def mark_spidered(self, url: str) -> None:
+        """Mark a URL as fully crawled (black) -- links/forms extracted."""
+        self._spidered_urls.add(normalize_url(url))
+
+    def get_unspidered_endpoints(self) -> list[Endpoint]:
+        """Return white endpoints: registered but never spider-crawled."""
+        seen: set[str] = set()
+        result: list[Endpoint] = []
+        for ep in self.discovered_endpoints:
+            norm = normalize_url(ep.url)
+            if norm not in self._spidered_urls and norm not in seen:
+                seen.add(norm)
+                result.append(ep)
+        return result
 
     def pause(self) -> None:
         """Pause all workers."""

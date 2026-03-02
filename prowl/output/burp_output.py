@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import json
+from base64 import b64encode
 from pathlib import Path
+from urllib.parse import urlparse
 
 import aiofiles
 
 from prowl.models.report import CrawlReport
-from prowl.models.target import Endpoint, Secret
+from prowl.models.target import Endpoint, ParameterLocation, Secret
 
 
 class BurpOutput:
@@ -29,44 +32,101 @@ class BurpOutput:
 
         items_xml = ""
         for ep in self._endpoints:
-            from urllib.parse import urlparse
+            items_xml += self._build_item(ep)
 
-            parsed = urlparse(ep.url)
-            host = parsed.hostname or ""
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
-            protocol = parsed.scheme or "https"
-            path_str = parsed.path or "/"
-            if parsed.query:
-                path_str += f"?{parsed.query}"
-
-            # Build minimal request
-            request_line = f"{ep.method} {path_str} HTTP/1.1"
-            request_headers = f"Host: {host}"
-            request_raw = f"{request_line}\\r\\n{request_headers}\\r\\n\\r\\n"
-
-            items_xml += f"""  <item>
-    <url>{_xml_esc(ep.url)}</url>
-    <host ip="">{_xml_esc(host)}</host>
-    <port>{port}</port>
-    <protocol>{protocol}</protocol>
-    <method>{ep.method}</method>
-    <path>{_xml_esc(path_str)}</path>
-    <request base64="false">{_xml_esc(request_raw)}</request>
-    <status>{ep.status_code or 0}</status>
-    <responselength>0</responselength>
-    <mimetype>{_xml_esc(ep.content_type)}</mimetype>
-    <comment>Prowl: {ep.source_module}</comment>
-  </item>
-"""
-
-        xml = f"""<?xml version="1.0"?>
-<!DOCTYPE items [<!ELEMENT items (item*)>]>
-<items burpVersion="2024.0" exportTime="">
-{items_xml}</items>
-"""
+        xml = (
+            '<?xml version="1.0"?>\n'
+            "<!DOCTYPE items [<!ELEMENT items (item*)>]>\n"
+            '<items burpVersion="2024.0" exportTime="">\n'
+            f"{items_xml}</items>\n"
+        )
 
         async with aiofiles.open(path, "w", encoding="utf-8") as f:
             await f.write(xml)
+
+    # ------------------------------------------------------------------
+
+    def _build_item(self, ep: Endpoint) -> str:
+        parsed = urlparse(ep.url)
+        host = parsed.hostname or ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        protocol = parsed.scheme or "https"
+        path_str = parsed.path or "/"
+        if parsed.query:
+            path_str += f"?{parsed.query}"
+
+        method = ep.method.upper()
+
+        # --- Build full HTTP request ---
+        headers_lines: list[str] = [f"Host: {host}"]
+
+        # Content-Type
+        body_params = [
+            p for p in ep.parameters if p.location == ParameterLocation.BODY
+        ]
+        ct = ep.content_type or ""
+        body_bytes = b""
+
+        if method in ("POST", "PUT", "PATCH") and body_params:
+            if "json" in ct.lower():
+                body_bytes = json.dumps(
+                    {
+                        p.name: p.sample_values[0] if p.sample_values else ""
+                        for p in body_params
+                    },
+                    ensure_ascii=False,
+                ).encode()
+                headers_lines.append("Content-Type: application/json")
+            else:
+                body_bytes = "&".join(
+                    f"{p.name}={p.sample_values[0] if p.sample_values else ''}"
+                    for p in body_params
+                ).encode()
+                headers_lines.append(
+                    "Content-Type: application/x-www-form-urlencoded"
+                )
+            headers_lines.append(f"Content-Length: {len(body_bytes)}")
+
+        # Header parameters
+        for p in ep.parameters:
+            if p.location == ParameterLocation.HEADER:
+                val = p.sample_values[0] if p.sample_values else ""
+                headers_lines.append(f"{p.name}: {val}")
+
+        # Cookie parameters
+        cookies = [
+            p for p in ep.parameters if p.location == ParameterLocation.COOKIE
+        ]
+        if cookies:
+            cookie_str = "; ".join(
+                f"{p.name}={p.sample_values[0] if p.sample_values else ''}"
+                for p in cookies
+            )
+            headers_lines.append(f"Cookie: {cookie_str}")
+
+        request_line = f"{method} {path_str} HTTP/1.1"
+        headers_block = "\r\n".join(headers_lines)
+        request_raw = f"{request_line}\r\n{headers_block}\r\n\r\n".encode()
+        if body_bytes:
+            request_raw += body_bytes
+
+        request_b64 = b64encode(request_raw).decode()
+
+        return (
+            "  <item>\n"
+            f"    <url>{_xml_esc(ep.url)}</url>\n"
+            f'    <host ip="">{_xml_esc(host)}</host>\n'
+            f"    <port>{port}</port>\n"
+            f"    <protocol>{protocol}</protocol>\n"
+            f"    <method>{method}</method>\n"
+            f"    <path>{_xml_esc(path_str)}</path>\n"
+            f'    <request base64="true">{request_b64}</request>\n'
+            f"    <status>{ep.status_code or 0}</status>\n"
+            f"    <responselength>0</responselength>\n"
+            f"    <mimetype>{_xml_esc(ep.content_type)}</mimetype>\n"
+            f"    <comment>Prowl: {ep.source_module}</comment>\n"
+            "  </item>\n"
+        )
 
 
 def _xml_esc(s: str) -> str:

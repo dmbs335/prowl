@@ -1,16 +1,17 @@
-"""Tech Fingerprinter — identifies application-layer technologies by
+"""Tech Fingerprinter - identifies application-layer technologies by
 analysing response bodies, script tags, meta tags, and URL paths.
 
 Complementary to s9_infra_mapper (network layer).  This module detects
 CMS, JS frameworks, CSS frameworks, server-side frameworks, analytics,
 and other application-level technologies.
 
-No additional HTTP requests are made — purely passive analysis of
+No additional HTTP requests are made - purely passive analysis of
 data already stored in the TransactionStore.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 import logging
 from typing import Any
@@ -59,24 +60,81 @@ class TechFingerprinterModule(BaseModule):
 
     async def run(self, **kwargs: Any) -> None:
         self._running = True
+        await self.engine.signals.emit(Signal.MODULE_STARTED, module=self.name)
         self.logger.info("Starting tech fingerprinting (passive analysis)")
 
+        # Two-pass approach to filter soft-404 pages:
+        # Pass 1: collect body hashes and count how many distinct URLs share them
+        body_hash_counts: dict[str, int] = {}
         txn_count = 0
+
+        async for txn in self.engine.transaction_store.get_all_transactions():
+            if not self._running:
+                break
+            ct = txn.response_content_type.lower()
+            if "html" not in ct:
+                txn_count += 1
+                continue
+            body = txn.response_body
+            if not body or len(body) < 32:
+                txn_count += 1
+                continue
+            h = hashlib.md5(body[:8192]).hexdigest()
+            body_hash_counts[h] = body_hash_counts.get(h, 0) + 1
+            txn_count += 1
+
+        # Body hashes appearing on 5+ distinct URLs are likely soft-404/default pages
+        soft_404_hashes = {h for h, c in body_hash_counts.items() if c >= 5}
+        if soft_404_hashes:
+            self.logger.info(
+                "Detected %d likely soft-404 body hashes (skipping for body analysis)",
+                len(soft_404_hashes),
+            )
+
+        # Pass 2: actual analysis with deduplication
+        seen_bodies: set[str] = set()
+        txn_count = 0
+        skipped_soft404 = 0
         async for txn in self.engine.transaction_store.get_all_transactions():
             if not self._running:
                 break
 
-            # URL path analysis (all transactions)
-            self._analyse_url_paths(txn.request_url)
+            # Compute body hash early (needed for URL path + body filtering)
+            body = txn.response_body
+            body_hash = ""
+            if body and len(body) >= 32:
+                body_hash = hashlib.md5(body[:8192]).hexdigest()
 
-            # Body analysis (only HTML responses, skip large bodies)
+            is_soft_404 = body_hash in soft_404_hashes
+
+            # URL path analysis — only for real successful responses
+            # (skip error status AND soft-404 pages)
+            if 200 <= txn.response_status < 400 and not is_soft_404:
+                self._analyse_url_paths(txn.request_url)
+
+            # Body analysis (only HTML responses, skip error status)
+            if txn.response_status >= 400:
+                txn_count += 1
+                continue
+
             ct = txn.response_content_type.lower()
             if "html" not in ct:
                 txn_count += 1
                 continue
 
-            body = txn.response_body
-            if not body or len(body) < 32:
+            if not body_hash:
+                txn_count += 1
+                continue
+
+            # Deduplicate: skip bodies we've already analysed
+            if body_hash in seen_bodies:
+                txn_count += 1
+                continue
+            seen_bodies.add(body_hash)
+
+            # Skip soft-404 pages (same body served on many different URLs)
+            if is_soft_404:
+                skipped_soft404 += 1
                 txn_count += 1
                 continue
 
@@ -88,17 +146,36 @@ class TechFingerprinterModule(BaseModule):
 
             txn_count += 1
 
-        self.logger.info("Analysed %d transactions", txn_count)
+        self.logger.info(
+            "Analysed %d transactions (%d unique bodies, %d soft-404 skipped)",
+            txn_count, len(seen_bodies), skipped_soft404,
+        )
 
         # Store results
         await self._store_results()
 
         self.endpoints_found = len(self._detections)
         self._running = False
+        await self.engine.signals.emit(
+            Signal.MODULE_COMPLETED, module=self.name, stats=self.get_stats()
+        )
         self.logger.info(
-            "Tech fingerprinting complete — %d technologies detected",
+            "Tech fingerprinting complete - %d technologies detected",
             len(self._detections),
         )
+
+    def get_stats(self) -> dict[str, Any]:
+        stats = super().get_stats()
+        by_category: dict[str, int] = {}
+        high_confidence = 0
+        for det in self._detections.values():
+            if det.confidence >= 0.30:
+                by_category[det.category] = by_category.get(det.category, 0) + 1
+                if det.confidence >= 0.80:
+                    high_confidence += 1
+        stats["by_category"] = by_category
+        stats["high_confidence"] = high_confidence
+        return stats
 
     # ------------------------------------------------------------------
     # Meta tag analysis  (<meta name="generator" content="WordPress 6.4">)

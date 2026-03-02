@@ -1,4 +1,4 @@
-"""AttackSurfaceStore — central repository for all discovery results."""
+"""AttackSurfaceStore - central repository for all discovery results."""
 
 from __future__ import annotations
 
@@ -115,6 +115,12 @@ class AttackSurfaceStore:
 
     def get_high_risk_vectors(self) -> list[InputVector]:
         return [iv for iv in self._input_vectors.values() if iv.risk_indicators]
+
+    def mark_requires_auth(self, url: str) -> None:
+        """Mark all endpoints matching this URL as requiring auth."""
+        for ep in self._endpoints.values():
+            if ep.url == url:
+                ep.requires_auth = True
 
     # --- Auth Boundaries ---
 

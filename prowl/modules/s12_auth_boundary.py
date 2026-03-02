@@ -1,4 +1,4 @@
-"""Auth Boundary Mapper — identifies authentication and authorisation
+"""Auth Boundary Mapper - identifies authentication and authorisation
 boundaries by comparing endpoint accessibility across security contexts.
 
 Analyses StateTransitionGraph data and TransactionStore responses to find:
@@ -35,7 +35,7 @@ class AuthBoundaryModule(BaseModule):
     """Maps authentication and authorisation boundaries across endpoints."""
 
     name = "s12_auth"
-    description = "Auth boundary mapper — access control boundary detection"
+    description = "Auth boundary mapper - access control boundary detection"
 
     def __init__(self, engine: Any) -> None:
         super().__init__(engine)
@@ -43,6 +43,7 @@ class AuthBoundaryModule(BaseModule):
 
     async def run(self, **kwargs: Any) -> None:
         self._running = True
+        await self.engine.signals.emit(Signal.MODULE_STARTED, module=self.name)
         self.logger.info("Starting auth boundary mapping")
 
         # Phase A: Analyse stored transactions for auth signals
@@ -56,8 +57,11 @@ class AuthBoundaryModule(BaseModule):
 
         self.endpoints_found = self._boundaries_found
         self._running = False
+        await self.engine.signals.emit(
+            Signal.MODULE_COMPLETED, module=self.name, stats=self.get_stats()
+        )
         self.logger.info(
-            "Auth boundary mapping complete — %d boundaries found",
+            "Auth boundary mapping complete - %d boundaries found",
             self._boundaries_found,
         )
 
@@ -93,6 +97,7 @@ class AuthBoundaryModule(BaseModule):
                     access_matrix={"anonymous": txn.response_status},
                 )
                 self.engine.attack_surface.register_auth_boundary(boundary)
+                self.engine.attack_surface.mark_requires_auth(txn.request_url)
                 self._boundaries_found += 1
                 await self.engine.signals.emit(
                     Signal.AUTH_BOUNDARY_FOUND, boundary=boundary,
@@ -110,6 +115,7 @@ class AuthBoundaryModule(BaseModule):
                         access_matrix={"anonymous": txn.response_status},
                     )
                     self.engine.attack_surface.register_auth_boundary(boundary)
+                    self.engine.attack_surface.mark_requires_auth(txn.request_url)
                     self._boundaries_found += 1
                     await self.engine.signals.emit(
                         Signal.AUTH_BOUNDARY_FOUND, boundary=boundary,
@@ -119,7 +125,7 @@ class AuthBoundaryModule(BaseModule):
         for path, entries in url_statuses.items():
             statuses = {s for s, _, _ in entries}
             if statuses & _AUTH_STATUSES and statuses & {200}:
-                # Same path has both success and auth-failure — IDOR candidate
+                # Same path has both success and auth-failure - IDOR candidate
                 for status, method, _loc in entries:
                     if status in _AUTH_STATUSES:
                         boundary = AuthBoundary(
@@ -131,6 +137,7 @@ class AuthBoundaryModule(BaseModule):
                             access_matrix={"anonymous": status, "some_user": 200},
                         )
                         self.engine.attack_surface.register_auth_boundary(boundary)
+                        self.engine.attack_surface.mark_requires_auth(path)
                         self._boundaries_found += 1
                         break  # one per path
 
@@ -188,7 +195,7 @@ class AuthBoundaryModule(BaseModule):
         """If auth roles are configured, compare access across roles.
 
         This phase only works if auth sessions were established by s7_auth_crawl.
-        It does NOT make new requests — it reads TransactionStore entries
+        It does NOT make new requests - it reads TransactionStore entries
         grouped by source_module containing auth role info.
         """
         roles = self.engine.config.auth_roles
@@ -229,6 +236,7 @@ class AuthBoundaryModule(BaseModule):
                     access_matrix=role_statuses,
                 )
                 self.engine.attack_surface.register_auth_boundary(boundary)
+                self.engine.attack_surface.mark_requires_auth(url)
                 self._boundaries_found += 1
                 await self.engine.signals.emit(
                     Signal.AUTH_BOUNDARY_FOUND, boundary=boundary,

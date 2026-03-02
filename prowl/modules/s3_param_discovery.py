@@ -1,4 +1,4 @@
-"""§3 Parameter Discovery — multi-method, multi-content-type parameter probing.
+"""§3 Parameter Discovery - multi-method, multi-content-type parameter probing.
 
 Discovery Only: uses benign marker values (prowl_probe_xxxx), never attack payloads.
 Four-phase discovery:
@@ -21,7 +21,7 @@ from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from prowl.core.signals import Signal
 from prowl.models.request import CrawlRequest, CrawlResponse, HttpMethod
-from prowl.models.target import Endpoint, Parameter, ParameterLocation
+from prowl.models.target import Endpoint, InputVector, Parameter, ParameterLocation
 from prowl.modules.base import BaseModule
 
 # Benign marker value (never an attack payload)
@@ -42,6 +42,11 @@ DEFAULT_PARAMS = [
 
 # HTTP methods to probe
 _PROBE_METHODS = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+
+# Short timeout for method/CT probing (seconds).
+# If a method is supported, the server responds fast.  A 30s hang means
+# Cloudflare/WAF is swallowing the request -- no point waiting.
+_PROBE_TIMEOUT = 5.0
 
 # Content-Types to probe
 _PROBE_CONTENT_TYPES = [
@@ -67,17 +72,23 @@ class BaselineResponse:
 class ParamDiscoveryModule(BaseModule):
     """§3: Multi-method parameter discovery with Content-Type variation.
 
-    Discovery Only — no attack payloads, only benign marker values.
+    Discovery Only - no attack payloads, only benign marker values.
     """
 
     name = "s3_params"
     description = "Parameter Discovery (multi-method, multi-content-type)"
+
+    # Stop probing an endpoint after this many consecutive identical responses
+    _CONTENT_STALE_THRESHOLD = 10
+    # Absolute cap: no endpoint gets more than this many probes in Phase B
+    _MAX_PROBES_PER_ENDPOINT = 50
 
     def __init__(self, engine: Any) -> None:
         super().__init__(engine)
         self._known_params: dict[str, set[str]] = {}  # endpoint_url → {param_names}
         self._endpoint_profiles: dict[str, dict] = {}  # endpoint_url → profile data
         self._params_found: int = 0
+        self._stale_endpoints: set[str] = set()  # endpoints that hit content stale threshold
 
     async def run(self, **kwargs: Any) -> None:
         self._running = True
@@ -114,7 +125,7 @@ class ParamDiscoveryModule(BaseModule):
     # ------------------------------------------------------------------
 
     async def _collect_known_params(self) -> None:
-        """Extract params already visible in stored HTTP traffic — zero requests."""
+        """Extract params already visible in stored HTTP traffic - zero requests."""
         # From query strings in stored URLs
         urls = await self.engine.transaction_store.get_urls()
         for url in urls:
@@ -172,18 +183,43 @@ class ParamDiscoveryModule(BaseModule):
 
         # Skip params already known on this endpoint
         known = self._known_params.get(endpoint.url, set())
+        consecutive_stale = 0
+        probes_sent = 0
 
         for param_name in wordlist:
             if not self._running:
                 return
             if param_name in known:
                 continue
+            # Early stop: if too many consecutive identical responses, this
+            # endpoint ignores query params - stop wasting requests.
+            if endpoint.url in self._stale_endpoints:
+                return
+            # Absolute cap per endpoint
+            if probes_sent >= self._MAX_PROBES_PER_ENDPOINT:
+                self.logger.debug(
+                    "Endpoint hit probe cap (%d): %s",
+                    self._MAX_PROBES_PER_ENDPOINT, endpoint.url,
+                )
+                return
 
             async with sem:
                 # Probe as query parameter
-                await self._probe_single_param(
+                is_diff = await self._probe_single_param(
                     endpoint, param_name, ParameterLocation.QUERY, baseline
                 )
+                probes_sent += 1
+                if is_diff:
+                    consecutive_stale = 0
+                else:
+                    consecutive_stale += 1
+                    if consecutive_stale >= self._CONTENT_STALE_THRESHOLD:
+                        self._stale_endpoints.add(endpoint.url)
+                        self.logger.debug(
+                            "Endpoint stale after %d identical responses: %s",
+                            consecutive_stale, endpoint.url,
+                        )
+                        return
 
     async def _probe_single_param(
         self,
@@ -191,8 +227,11 @@ class ParamDiscoveryModule(BaseModule):
         param_name: str,
         location: ParameterLocation,
         baseline: BaselineResponse,
-    ) -> None:
-        """Send a single probe request and compare to baseline."""
+    ) -> bool:
+        """Send a single probe request and compare to baseline.
+
+        Returns True if the response differed from baseline.
+        """
         try:
             if location == ParameterLocation.QUERY:
                 sep = "&" if "?" in endpoint.url else "?"
@@ -221,7 +260,7 @@ class ParamDiscoveryModule(BaseModule):
                     depth=endpoint.depth,
                 )
             else:
-                return
+                return False
 
             await self.engine.rate_limiter.wait()
             response = await self.engine.execute(request)
@@ -235,6 +274,18 @@ class ParamDiscoveryModule(BaseModule):
                     sample_values=[_MARKER],
                     source_module=self.name,
                 )
+                # Persist: add to endpoint's parameter list
+                if param_name not in {p.name for p in endpoint.parameters}:
+                    endpoint.parameters.append(param)
+                # Persist: register as InputVector in attack_surface
+                iv = InputVector(
+                    endpoint_url=endpoint.url,
+                    name=param_name,
+                    location=location,
+                    sample_values=[_MARKER],
+                    source_module=self.name,
+                )
+                self.engine.attack_surface.register_input_vector(iv)
                 await self.engine.signals.emit(
                     Signal.HIDDEN_PARAM_FOUND,
                     endpoint=endpoint,
@@ -247,9 +298,11 @@ class ParamDiscoveryModule(BaseModule):
                     param_name, location, endpoint.url, reason,
                     endpoint.method,
                 )
+            return is_diff
 
         except Exception:
             self.errors += 1
+            return False
 
     # ------------------------------------------------------------------
     # Phase C: HTTP method probing
@@ -276,6 +329,7 @@ class ParamDiscoveryModule(BaseModule):
         """Probe all HTTP methods on a single endpoint."""
         accepted: list[str] = []
         allow_header = ""
+        consecutive_405 = 0
 
         for method in _PROBE_METHODS:
             if not self._running:
@@ -290,11 +344,34 @@ class ParamDiscoveryModule(BaseModule):
                         depth=endpoint.depth,
                     )
                     await self.engine.rate_limiter.wait()
-                    response = await self.engine.execute(request)
+                    try:
+                        response = await asyncio.wait_for(
+                            self.engine.execute(request), timeout=_PROBE_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        # Timeout = method not supported (WAF swallowing)
+                        consecutive_405 += 1
+                        self.requests_made += 1
+                        if consecutive_405 >= 3:
+                            self.logger.debug(
+                                "Method probe early stop (%d consecutive 405/timeout): %s",
+                                consecutive_405, endpoint.url,
+                            )
+                            break
+                        continue
                     self.requests_made += 1
 
-                    # 405 = method not allowed, skip
-                    if response.status_code != 405:
+                    # 405 or timeout(status=0) = method not supported
+                    if response.status_code in (405, 0):
+                        consecutive_405 += 1
+                        if consecutive_405 >= 3:
+                            self.logger.debug(
+                                "Method probe early stop (%d consecutive 405/timeout): %s",
+                                consecutive_405, endpoint.url,
+                            )
+                            break
+                    else:
+                        consecutive_405 = 0
                         accepted.append(method)
 
                     # Capture Allow header from OPTIONS response
@@ -302,7 +379,7 @@ class ParamDiscoveryModule(BaseModule):
                         allow_header = response.headers["allow"]
 
                     # Emit signal for newly discovered methods
-                    if method != endpoint.method and response.status_code not in (404, 405, 501):
+                    if method != endpoint.method and response.status_code not in (404, 405, 501, 0):
                         await self.engine.signals.emit(
                             Signal.METHOD_DISCOVERED,
                             endpoint=endpoint,
@@ -377,11 +454,17 @@ class ParamDiscoveryModule(BaseModule):
                         depth=endpoint.depth,
                     )
                     await self.engine.rate_limiter.wait()
-                    response = await self.engine.execute(request)
+                    try:
+                        response = await asyncio.wait_for(
+                            self.engine.execute(request), timeout=_PROBE_TIMEOUT,
+                        )
+                    except asyncio.TimeoutError:
+                        self.requests_made += 1
+                        continue
                     self.requests_made += 1
 
-                    # 415 = Unsupported Media Type
-                    if response.status_code != 415:
+                    # 415 = Unsupported Media Type, 0 = timeout
+                    if response.status_code not in (415, 0):
                         accepted.append(ct)
                         await self.engine.signals.emit(
                             Signal.CONTENT_TYPE_ACCEPTED,
@@ -396,9 +479,6 @@ class ParamDiscoveryModule(BaseModule):
         profile = self._endpoint_profiles.setdefault(endpoint.url, {})
         profile["accepted_content_types"] = accepted
 
-        # Parse CORS from any response
-        cors_origins = profile.get("cors_allowed_origins", [])
-        profile["cors_allowed_origins"] = cors_origins
 
     # ------------------------------------------------------------------
     # Helpers
@@ -433,6 +513,11 @@ class ParamDiscoveryModule(BaseModule):
         self, response: CrawlResponse, baseline: BaselineResponse
     ) -> tuple[bool, str]:
         """Multi-signal differential comparison. Returns (is_different, reason)."""
+        # Timeout is not a meaningful difference - just a failed request.
+        # Treating it as "different" would reset the stale counter and waste budget.
+        if response.status_code == 0:
+            return False, ""
+
         # Status code change
         status_bucket = response.status_code // 100
         baseline_bucket = baseline.status_code // 100

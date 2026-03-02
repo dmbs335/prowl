@@ -1,10 +1,10 @@
-"""§8 State Transition Discovery — map application state machines.
+"""§8 State Transition Discovery - map application state machines.
 
 Discovery Only:
-- Phase A: Identify forms (login, register, checkout, etc.) — read only
-- Phase B: Execute safe transitions (login with provided credentials) — login only
-- Phase C: Map multi-step flows (track request sequences) — read only
-- Phase D: Classify state-specific endpoints — read only
+- Phase A: Identify forms (login, register, checkout, etc.) - read only
+- Phase B: Execute safe transitions (login with provided credentials) - login only
+- Phase C: Map multi-step flows (track request sequences) - read only
+- Phase D: Classify state-specific endpoints - read only
 
 NEVER executes: registration, payment, deletion, password changes, or any
 other action with side effects.
@@ -27,7 +27,7 @@ from prowl.models.target import Endpoint
 from prowl.modules.base import BaseModule
 
 
-# Forms with side effects — NEVER auto-execute
+# Forms with side effects - NEVER auto-execute
 _UNSAFE_FORM_TYPES = frozenset({"register", "checkout", "password_reset"})
 
 
@@ -216,7 +216,7 @@ class StateTransitionModule(BaseModule):
                         login_fields[field_name] = username
                     elif fl in ("password", "passwd", "pwd", "pass"):
                         login_fields[field_name] = password
-                    # CSRF token — try to get from the form page
+                    # CSRF token - try to get from the form page
                     elif fl in ("csrf", "token", "_token", "csrf_token", "csrfmiddlewaretoken"):
                         csrf_val = await self._get_csrf_token(
                             login_form.get("source_url", ""), field_name
@@ -316,9 +316,9 @@ class StateTransitionModule(BaseModule):
         """Select recrawl targets prioritized by coverage insights.
 
         Priority order:
-        1. Auth boundaries (403/401 from HindsightFeedback) — most likely to reveal new content
-        2. Unvisited templates — never explored under any auth
-        3. Shallow depth — broader coverage first
+        1. Auth boundaries (403/401 from HindsightFeedback) - most likely to reveal new content
+        2. Unvisited templates - never explored under any auth
+        3. Shallow depth - broader coverage first
         """
         from prowl.core.exploration import CoverageBitmap
 

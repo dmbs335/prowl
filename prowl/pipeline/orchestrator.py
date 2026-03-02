@@ -58,12 +58,19 @@ class PipelineOrchestrator:
         self._phase_exploration: dict[str, dict[str, Any]] = {}
 
     def _instantiate_modules(self) -> None:
-        """Create module instances based on config."""
+        """Create module instances based on config.
+
+        Modules that appear in multiple phases (e.g. s1_spider in both
+        active_crawl and deep_crawl) share a single instance so that the
+        BFS color state carries over between runs.
+        """
         selected = self.engine.config.modules
         for phase in self.phases:
             for mod_name in phase.modules:
                 if selected and mod_name not in selected:
                     continue
+                if mod_name in self._module_instances:
+                    continue  # reuse existing instance
                 cls = MODULE_MAP.get(mod_name)
                 if cls:
                     self._module_instances[mod_name] = cls(self.engine)
@@ -169,7 +176,8 @@ class PipelineOrchestrator:
             )
 
     async def _run_module(self, module: BaseModule) -> None:
-        """Run a single module with signal emission."""
+        """Run a single module with signal emission and timing."""
+        start = time.time()
         try:
             await module.run()
         except Exception as e:
@@ -178,6 +186,8 @@ class PipelineOrchestrator:
             await self.engine.signals.emit(
                 Signal.MODULE_ERROR, module=module.name, error=str(e)
             )
+        finally:
+            module.duration_seconds = time.time() - start
 
     def get_phase_states(self) -> dict[str, str]:
         """Get current state of all phases."""

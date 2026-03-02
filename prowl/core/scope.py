@@ -1,4 +1,4 @@
-"""Scope checking — determines if URLs are in-scope for crawling."""
+"""Scope checking - determines if URLs are in-scope for crawling."""
 
 from __future__ import annotations
 
@@ -41,6 +41,14 @@ class ScopeManager:
             return any(p.search(url) for p in self._include_re)
 
         return True
+
+    def add_include_pattern(self, pattern: str) -> None:
+        """Add a regex include pattern at runtime."""
+        self._include_re.append(re.compile(pattern))
+
+    def add_exclude_pattern(self, pattern: str) -> None:
+        """Add a regex exclude pattern at runtime."""
+        self._exclude_re.append(re.compile(pattern))
 
     def _is_same_or_sub_domain(self, host: str) -> bool:
         """Check if host matches target or is a subdomain."""
