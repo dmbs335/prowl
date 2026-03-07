@@ -166,7 +166,7 @@ class DirBruteforceModule(BaseModule):
                 )
             else:
                 self._consecutive_miss += 1
-                if self._consecutive_miss >= self._consecutive_miss_limit:
+                if self._consecutive_miss == self._consecutive_miss_limit:
                     self._running = False
                     self.logger.info(
                         "Early exit: %d consecutive misses", self._consecutive_miss
