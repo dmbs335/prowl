@@ -36,8 +36,12 @@ class DirBruteforceModule(BaseModule):
     name = "s2_bruteforce"
     description = "Directory & File Bruteforcing (wordlist-based discovery)"
 
+    _consecutive_miss: int = 0
+    _consecutive_miss_limit: int = 50
+
     async def run(self, **kwargs: Any) -> None:
         self._running = True
+        self._consecutive_miss = 0
         await self.engine.signals.emit(Signal.MODULE_STARTED, module=self.name)
 
         target = self.engine.config.target_url.rstrip("/")
@@ -146,6 +150,7 @@ class DirBruteforceModule(BaseModule):
 
             # Filter out common false positives
             if self._is_interesting(response):
+                self._consecutive_miss = 0
                 endpoint = Endpoint(
                     url=url,
                     method="GET",
@@ -159,6 +164,13 @@ class DirBruteforceModule(BaseModule):
                 self.logger.info(
                     "Found: %s [%d]", path, response.status_code
                 )
+            else:
+                self._consecutive_miss += 1
+                if self._consecutive_miss >= self._consecutive_miss_limit:
+                    self._running = False
+                    self.logger.info(
+                        "Early exit: %d consecutive misses", self._consecutive_miss
+                    )
 
     def _is_interesting(self, response: CrawlResponse) -> bool:
         """Filter using ResponseClassifier (soft-404, WAF, error detection)."""

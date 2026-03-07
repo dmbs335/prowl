@@ -358,6 +358,10 @@ class CrawlEngine:
                 self.requests_failed += 1
                 return response
 
+        # Classify all responses for page_type (soft-404, WAF, etc.)
+        if self._response_classifier is not None and not response.page_type:
+            response.page_type = self._response_classifier.classify(response)
+
         # Hindsight feedback for non-success responses
         if self.config.hindsight_feedback and not response.is_success:
             self.hindsight.analyze(
