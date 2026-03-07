@@ -50,28 +50,19 @@ def _build_status(api: Any) -> CrawlStatusResponse:
 
 async def _run_pipeline(api: Any) -> None:
     """Background task: run the full pipeline then write output."""
-    from prowl.pipeline.orchestrator import PipelineOrchestrator
-
-    orchestrator = api.orchestrator
-    engine = api.engine
-    config = engine.config
-    start = time.time()
+    session = api.session
 
     try:
-        await orchestrator.run()
+        await session.run_pipeline()
     except Exception:
         logger.exception("Pipeline failed")
     finally:
-        elapsed = time.time() - start
-        # Import and call output writer from cli
         try:
-            from prowl.cli import _write_output
-
-            await _write_output(config, engine, orchestrator, elapsed)
+            await session.write_output()
         except Exception:
             logger.exception("Output writing failed")
 
-        await engine.shutdown()
+        await session.shutdown()
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -85,12 +76,9 @@ async def _run_pipeline(api: Any) -> None:
     "The crawl runs as a background task. Use GET /crawl/status to monitor progress.",
 )
 async def start_crawl(body: CrawlStartRequest) -> CrawlStatusResponse:
-    from prowl.core.engine import CrawlEngine, EngineState
+    from prowl.core.engine import EngineState
     from prowl.core.config import CrawlConfig
-    from prowl.dashboard.bridge import DashboardBridge
-    from prowl.dashboard.state import DashboardState
-    from prowl.intervention.manager import InterventionManager
-    from prowl.pipeline.orchestrator import PipelineOrchestrator
+    from prowl.session import CrawlSession
 
     api = get_api_state()
 
@@ -104,21 +92,17 @@ async def start_crawl(body: CrawlStartRequest) -> CrawlStatusResponse:
     # Build config from request
     config = CrawlConfig(**body.model_dump())
 
-    # Create fresh engine and supporting components
-    engine = CrawlEngine(config)
-    await engine.startup()
+    # Create session and set up all components
+    session = CrawlSession(config)
+    await session.setup()
 
-    intervention_mgr = InterventionManager(engine.signals)
-    dashboard_state = DashboardState()
-    bridge = DashboardBridge(engine.signals, dashboard_state)
-    orchestrator = PipelineOrchestrator(engine)
-
-    # Update shared state
-    api.engine = engine
-    api.state = dashboard_state
-    api.bridge = bridge
-    api.intervention_manager = intervention_mgr
-    api.orchestrator = orchestrator
+    # Update shared API state
+    api.engine = session.engine
+    api.state = session.dashboard_state
+    api.bridge = session.bridge
+    api.intervention_manager = session.intervention_mgr
+    api.orchestrator = session.orchestrator
+    api.session = session
 
     # Cancel previous background task if any
     if api._background_task and not api._background_task.done():

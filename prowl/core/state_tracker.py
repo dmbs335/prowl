@@ -227,6 +227,7 @@ class StateTransitionGraph:
 
     def __init__(self) -> None:
         self._transitions: list[StateTransition] = []
+        self._transitions_by_source: dict[str, list[StateTransition]] = {}  # from_state → transitions
         self._states: dict[str, SecurityContext] = {}  # identity → SecurityContext
         self._state_endpoints: dict[str, set[str]] = {}  # identity → set of endpoint URLs
         self._current_context: SecurityContext = SecurityContext()
@@ -297,6 +298,7 @@ class StateTransitionGraph:
             new_endpoints_discovered=new_count,
         )
         self._transitions.append(transition)
+        self._transitions_by_source.setdefault(transition.from_state, []).append(transition)
         return transition
 
     def record_flow(self, flow: FlowSequence) -> None:
@@ -309,8 +311,8 @@ class StateTransitionGraph:
         stack = [from_identity]
         while stack:
             current = stack.pop()
-            for t in self._transitions:
-                if t.from_state == current and t.to_state not in reachable:
+            for t in self._transitions_by_source.get(current, []):
+                if t.to_state not in reachable:
                     reachable.add(t.to_state)
                     stack.append(t.to_state)
         return list(reachable)
@@ -329,8 +331,8 @@ class StateTransitionGraph:
 
         while queue:
             current, path = queue.popleft()
-            for t in self._transitions:
-                if t.from_state == current and t.to_state not in visited:
+            for t in self._transitions_by_source.get(current, []):
+                if t.to_state not in visited:
                     new_path = path + [t]
                     if t.to_state == to_identity:
                         return new_path

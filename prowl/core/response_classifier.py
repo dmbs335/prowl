@@ -37,6 +37,9 @@ _WAF_BODY_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"Web\s+Application\s+Firewall", re.IGNORECASE),
     re.compile(r"This\s+request\s+has\s+been\s+blocked", re.IGNORECASE),
     re.compile(r"<title>\s*403\s+Forbidden\s*</title>", re.IGNORECASE),
+    re.compile(r"Access\s+Denied.*?Incapsula|Powered\s+By\s+Incapsula", re.IGNORECASE | re.DOTALL),
+    re.compile(r"AkamaiGHost|Request\s+ID.*?akamai", re.IGNORECASE | re.DOTALL),
+    re.compile(r"Fastly\s+error:\s+unknown\s+domain|Varnish\s+cache\s+server", re.IGNORECASE),
 ]
 
 # ---------------------------------------------------------------------------
@@ -123,12 +126,20 @@ _EMPTY_BODY_THRESHOLD = 64  # bytes
 
 
 class ResponseClassifier:
-    """Classifies HTTP responses by pattern to filter false positives and identify page types."""
+    """Classifies HTTP responses by pattern to filter false positives and identify page types.
+
+    Supports per-domain baselines: each domain (netloc) gets its own
+    soft-404 fingerprints, learned on first use via ``set_baseline``.
+    """
 
     def __init__(self) -> None:
         self._baseline: _BaselineState = _BaselineState()
         self._baseline_ready: bool = False
         self._seen_hashes: set[str] = set()
+        # Per-domain baselines: netloc -> _BaselineState
+        self._domain_baselines: dict[str, _BaselineState] = {}
+        self._domain_baseline_pending: set[str] = set()
+        self._backend: Any = None
 
     # ------------------------------------------------------------------
     # Baseline learning
@@ -142,6 +153,8 @@ class ResponseClassifier:
         3. Store content hashes, lengths, and status codes of 404 patterns.
         4. Detect custom 404 pages (200 status but same content for non-existent paths).
         """
+        self._backend = backend
+
         # --- known-good -------------------------------------------------
         good_req = CrawlRequest(
             url=target_url,
@@ -152,7 +165,7 @@ class ResponseClassifier:
             good_resp: CrawlResponse = await backend.execute(good_req)
             self._baseline.target_status = good_resp.status_code
             logger.debug(
-                "Baseline good page %s → %d (%d bytes)",
+                "Baseline good page %s -> %d (%d bytes)",
                 target_url,
                 good_resp.status_code,
                 len(good_resp.body),
@@ -164,13 +177,32 @@ class ResponseClassifier:
                 exc_info=True,
             )
 
-        # --- known-bad (random UUID paths) ------------------------------
-        base = target_url.rstrip("/") + "/"
+        baseline = await self._learn_domain_baseline(target_url, backend)
+        self._baseline = baseline
+        self._baseline_ready = True
+
+        from urllib.parse import urlparse
+        domain = urlparse(target_url).netloc
+        self._domain_baselines[domain] = baseline
+
+        logger.info(
+            "Baseline learning complete: custom_404=%s, %d probe fingerprints stored",
+            self._baseline.has_custom_404,
+            len(baseline.not_found_fingerprints),
+        )
+
+    async def _learn_domain_baseline(self, base_url: str, backend: Any) -> _BaselineState:
+        """Learn 404 baseline for a specific domain by probing random UUID paths."""
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        domain_root = f"{parsed.scheme}://{parsed.netloc}/"
+
+        state = _BaselineState()
         probe_fingerprints: list[_BaselineFingerprint] = []
 
         for _ in range(_NUM_BASELINE_PROBES):
             random_path = uuid.uuid4().hex
-            probe_url = urljoin(base, random_path)
+            probe_url = urljoin(domain_root, random_path)
             probe_req = CrawlRequest(
                 url=probe_url,
                 method=HttpMethod.GET,
@@ -186,7 +218,7 @@ class ResponseClassifier:
                 )
                 probe_fingerprints.append(fp)
                 logger.debug(
-                    "Baseline probe %s → %d (%d bytes, hash=%s)",
+                    "Baseline probe %s -> %d (%d bytes, hash=%s)",
                     probe_url,
                     fp.status_code,
                     fp.content_length,
@@ -199,32 +231,47 @@ class ResponseClassifier:
                     exc_info=True,
                 )
 
-        self._baseline.not_found_fingerprints = probe_fingerprints
+        state.not_found_fingerprints = probe_fingerprints
 
-        # --- detect custom 404 (all probes returned 200 with similar bodies)
         if len(probe_fingerprints) >= 2:
             all_200 = all(fp.status_code == 200 for fp in probe_fingerprints)
             hashes = {fp.content_hash for fp in probe_fingerprints}
             lengths = [fp.content_length for fp in probe_fingerprints]
             avg_len = sum(lengths) / len(lengths) if lengths else 0
             lengths_similar = avg_len > 0 and all(
-                abs(l - avg_len) / avg_len <= _CONTENT_LENGTH_TOLERANCE for l in lengths
+                abs(ln - avg_len) / avg_len <= _CONTENT_LENGTH_TOLERANCE for ln in lengths
             )
 
-            if all_200 and (len(hashes) == 1 or lengths_similar):
-                self._baseline.has_custom_404 = True
+            if all_200 and (len(hashes) == 1 and lengths_similar):
+                state.has_custom_404 = True
                 logger.info(
-                    "Custom 404 detected: status=200, avg_length=%d, unique_hashes=%d",
+                    "Custom 404 detected for %s: status=200, avg_length=%d",
+                    parsed.netloc,
                     int(avg_len),
-                    len(hashes),
                 )
 
-        self._baseline_ready = True
-        logger.info(
-            "Baseline learning complete: custom_404=%s, %d probe fingerprints stored",
-            self._baseline.has_custom_404,
-            len(probe_fingerprints),
-        )
+        return state
+
+    async def ensure_domain_baseline(self, url: str) -> None:
+        """Learn baseline for the domain of *url* if not already known."""
+        if self._backend is None:
+            return
+        from urllib.parse import urlparse
+        domain = urlparse(url).netloc
+        if not domain or domain in self._domain_baselines or domain in self._domain_baseline_pending:
+            return
+        self._domain_baseline_pending.add(domain)
+        try:
+            baseline = await self._learn_domain_baseline(url, self._backend)
+            self._domain_baselines[domain] = baseline
+            logger.info(
+                "Learned baseline for %s: custom_404=%s, %d fingerprints",
+                domain, baseline.has_custom_404, len(baseline.not_found_fingerprints),
+            )
+        except Exception:
+            logger.warning("Failed to learn baseline for %s", domain, exc_info=True)
+        finally:
+            self._domain_baseline_pending.discard(domain)
 
     # ------------------------------------------------------------------
     # Classification
@@ -232,6 +279,9 @@ class ResponseClassifier:
 
     def classify(self, response: CrawlResponse) -> str:
         """Classify a response into a page-type category.
+
+        Uses the per-domain baseline matching the response URL when available,
+        falling back to the primary baseline.
 
         Returns one of:
             ``"real_content"`` -- genuine, unique page content
@@ -277,8 +327,9 @@ class ResponseClassifier:
         if self._matches_error_body(body_text):
             return "error"
 
-        # --- custom 404 --------------------------------------------------
-        if self._baseline_ready and self._matches_custom_404(response):
+        # --- custom 404 (per-domain baseline) ----------------------------
+        baseline = self._get_baseline_for_response(response)
+        if baseline and self._matches_custom_404_with_baseline(response, baseline):
             return "custom_404"
 
         # --- explicit 404 treated the same as custom 404 -----------------
@@ -287,6 +338,17 @@ class ResponseClassifier:
 
         # --- default: real content ---------------------------------------
         return "real_content"
+
+    def _get_baseline_for_response(self, response: CrawlResponse) -> _BaselineState | None:
+        """Return the baseline for the response's domain, falling back to primary."""
+        from urllib.parse import urlparse
+        url = response.url_final or (response.request.url if response.request else "")
+        domain = urlparse(url).netloc
+        if domain and domain in self._domain_baselines:
+            return self._domain_baselines[domain]
+        if self._baseline_ready:
+            return self._baseline
+        return None
 
     # ------------------------------------------------------------------
     # Content uniqueness
@@ -374,19 +436,26 @@ class ResponseClassifier:
     # --- Custom 404 ---
 
     def _matches_custom_404(self, response: CrawlResponse) -> bool:
-        """Return ``True`` if *response* looks like a custom 404 based on baselines."""
-        if not self._baseline.not_found_fingerprints:
+        """Return ``True`` if *response* looks like a custom 404 based on primary baseline."""
+        return self._matches_custom_404_with_baseline(response, self._baseline)
+
+    @staticmethod
+    def _matches_custom_404_with_baseline(
+        response: CrawlResponse, baseline: _BaselineState
+    ) -> bool:
+        """Return ``True`` if *response* matches a custom 404 in *baseline*."""
+        if not baseline.not_found_fingerprints:
             return False
 
         # Exact content hash match with any baseline probe
         resp_hash = response.content_hash
-        for fp in self._baseline.not_found_fingerprints:
+        for fp in baseline.not_found_fingerprints:
             if resp_hash == fp.content_hash:
                 return True
 
         # Fuzzy match: same status code + similar content length
         resp_len = len(response.body)
-        for fp in self._baseline.not_found_fingerprints:
+        for fp in baseline.not_found_fingerprints:
             if response.status_code != fp.status_code:
                 continue
             if fp.content_length == 0:

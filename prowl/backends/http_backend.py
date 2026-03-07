@@ -130,6 +130,7 @@ class HttpBackend:
             doc = html_fromstring(body)
             doc.make_links_absolute(base_url, resolve_base_href=True)
         except Exception:
+            logger.debug("HTML parse failed for %s", base_url, exc_info=True)
             return [], [], [], []
 
         links = self._extract_links(doc)

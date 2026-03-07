@@ -52,8 +52,11 @@ class ScopeManager:
 
     def _is_same_or_sub_domain(self, host: str) -> bool:
         """Check if host matches target or is a subdomain."""
-        if host == self._target_host:
+        # Normalize IPv6: strip brackets if present
+        host = host.strip("[]")
+        target = self._target_host.strip("[]")
+        if host == target:
             return True
-        if host.endswith(f".{self._target_host}"):
+        if host.endswith(f".{target}"):
             return True
         return False

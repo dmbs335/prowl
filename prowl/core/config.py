@@ -131,3 +131,10 @@ class CrawlConfig(BaseSettings):
     # Passive
     use_wayback: bool = True
     use_commoncrawl: bool = False
+
+    # CDP Security Intelligence
+    cdp_profiling: bool = False
+    cdp_collect_network: bool = True
+    cdp_collect_websockets: bool = True
+    cdp_collect_console: bool = True
+    cdp_max_network_entries: int = 500

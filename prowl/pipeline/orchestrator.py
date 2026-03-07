@@ -23,6 +23,7 @@ from prowl.modules.s10_tech_fingerprinter import TechFingerprinterModule
 from prowl.modules.s11_input_classifier import InputClassifierModule
 from prowl.modules.s12_auth_boundary import AuthBoundaryModule
 from prowl.modules.s13_report_generator import ReportGeneratorModule
+from prowl.modules.s14_cdp_analysis import CDPAnalysisModule
 from prowl.pipeline.phase import DEFAULT_PHASES, Phase, PhaseState
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ MODULE_MAP: dict[str, type[BaseModule]] = {
     "s11_input": InputClassifierModule,
     "s12_auth": AuthBoundaryModule,
     "s13_report": ReportGeneratorModule,
+    "s14_cdp": CDPAnalysisModule,
 }
 
 
@@ -98,6 +100,9 @@ class PipelineOrchestrator:
                 phase.state = PhaseState.SKIPPED
                 completed_phases.add(phase.name)
                 continue
+
+            # Reset auto-merge template counts so each phase gets a fresh budget
+            self.engine.queue.reset_template_counts()
 
             # Snapshot exploration state before the phase
             coverage_before = self.engine.coverage.coverage_count

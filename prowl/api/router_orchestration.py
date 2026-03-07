@@ -502,9 +502,9 @@ async def auto_login(body: AutoLoginRequest) -> LoginResultResponse:
                 extra_fields=body.extra_fields or {},
             ),
         )
-        engine.sessions.add_role(role)
+        await engine.sessions.add_role(role)
         session = AuthSession(role=role, session_cookies=result["cookies"])
-        engine.sessions.add_session(session)
+        await engine.sessions.add_session(session)
 
     await engine.signals.emit(
         Signal.AUTH_LOGIN_ATTEMPTED,

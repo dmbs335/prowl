@@ -83,12 +83,20 @@ class ParamDiscoveryModule(BaseModule):
     # Absolute cap: no endpoint gets more than this many probes in Phase B
     _MAX_PROBES_PER_ENDPOINT = 50
 
+    # Global early-exit: skip a method/CT probe type after N consecutive
+    # failures across different endpoints.
+    _GLOBAL_METHOD_DEAD_THRESHOLD = 5
+    _GLOBAL_CT_DEAD_THRESHOLD = 5
+
     def __init__(self, engine: Any) -> None:
         super().__init__(engine)
         self._known_params: dict[str, set[str]] = {}  # endpoint_url → {param_names}
         self._endpoint_profiles: dict[str, dict] = {}  # endpoint_url → profile data
         self._params_found: int = 0
         self._stale_endpoints: set[str] = set()  # endpoints that hit content stale threshold
+        # Global probe pattern trackers (method → consecutive endpoint failures)
+        self._method_fail_streak: dict[str, int] = {}
+        self._ct_fail_streak: dict[str, int] = {}
 
     async def run(self, **kwargs: Any) -> None:
         self._running = True
@@ -262,7 +270,7 @@ class ParamDiscoveryModule(BaseModule):
             else:
                 return False
 
-            await self.engine.rate_limiter.wait()
+            await self.engine.rate_limiter.wait(endpoint.url)
             response = await self.engine.execute(request)
             self.requests_made += 1
 
@@ -334,8 +342,12 @@ class ParamDiscoveryModule(BaseModule):
         for method in _PROBE_METHODS:
             if not self._running:
                 return
+            # Global early-exit: skip methods that consistently fail across endpoints
+            if self._method_fail_streak.get(method, 0) >= self._GLOBAL_METHOD_DEAD_THRESHOLD:
+                continue
 
             async with sem:
+                method_failed = False
                 try:
                     request = CrawlRequest(
                         url=endpoint.url,
@@ -343,7 +355,7 @@ class ParamDiscoveryModule(BaseModule):
                         source_module=self.name,
                         depth=endpoint.depth,
                     )
-                    await self.engine.rate_limiter.wait()
+                    await self.engine.rate_limiter.wait(endpoint.url)
                     try:
                         response = await asyncio.wait_for(
                             self.engine.execute(request), timeout=_PROBE_TIMEOUT,
@@ -351,28 +363,39 @@ class ParamDiscoveryModule(BaseModule):
                     except asyncio.TimeoutError:
                         # Timeout = method not supported (WAF swallowing)
                         consecutive_405 += 1
+                        method_failed = True
                         self.requests_made += 1
                         if consecutive_405 >= 3:
                             self.logger.debug(
                                 "Method probe early stop (%d consecutive 405/timeout): %s",
                                 consecutive_405, endpoint.url,
                             )
+                            self._method_fail_streak[method] = self._method_fail_streak.get(method, 0) + 1
                             break
+                        self._method_fail_streak[method] = self._method_fail_streak.get(method, 0) + 1
                         continue
                     self.requests_made += 1
 
                     # 405 or timeout(status=0) = method not supported
                     if response.status_code in (405, 0):
                         consecutive_405 += 1
+                        method_failed = True
                         if consecutive_405 >= 3:
                             self.logger.debug(
                                 "Method probe early stop (%d consecutive 405/timeout): %s",
                                 consecutive_405, endpoint.url,
                             )
+                            self._method_fail_streak[method] = self._method_fail_streak.get(method, 0) + 1
                             break
                     else:
                         consecutive_405 = 0
                         accepted.append(method)
+
+                    # Update global method fail streak
+                    if method_failed:
+                        self._method_fail_streak[method] = self._method_fail_streak.get(method, 0) + 1
+                    else:
+                        self._method_fail_streak[method] = 0
 
                     # Capture Allow header from OPTIONS response
                     if method == "OPTIONS" and "allow" in response.headers:
@@ -431,6 +454,9 @@ class ParamDiscoveryModule(BaseModule):
         for ct in _PROBE_CONTENT_TYPES:
             if not self._running:
                 return
+            # Global early-exit: skip CTs that consistently fail across endpoints
+            if self._ct_fail_streak.get(ct, 0) >= self._GLOBAL_CT_DEAD_THRESHOLD:
+                continue
 
             async with sem:
                 try:
@@ -453,18 +479,22 @@ class ParamDiscoveryModule(BaseModule):
                         source_module=self.name,
                         depth=endpoint.depth,
                     )
-                    await self.engine.rate_limiter.wait()
+                    await self.engine.rate_limiter.wait(endpoint.url)
                     try:
                         response = await asyncio.wait_for(
                             self.engine.execute(request), timeout=_PROBE_TIMEOUT,
                         )
                     except asyncio.TimeoutError:
                         self.requests_made += 1
+                        self._ct_fail_streak[ct] = self._ct_fail_streak.get(ct, 0) + 1
                         continue
                     self.requests_made += 1
 
                     # 415 = Unsupported Media Type, 0 = timeout
-                    if response.status_code not in (415, 0):
+                    if response.status_code in (415, 0):
+                        self._ct_fail_streak[ct] = self._ct_fail_streak.get(ct, 0) + 1
+                    else:
+                        self._ct_fail_streak[ct] = 0
                         accepted.append(ct)
                         await self.engine.signals.emit(
                             Signal.CONTENT_TYPE_ACCEPTED,
@@ -491,7 +521,7 @@ class ParamDiscoveryModule(BaseModule):
                 url=url, method=HttpMethod.GET, source_module=self.name,
             )
             t0 = time.monotonic()
-            await self.engine.rate_limiter.wait()
+            await self.engine.rate_limiter.wait(url)
             response = await self.engine.execute(request)
             elapsed = (time.monotonic() - t0) * 1000
             self.requests_made += 1
@@ -552,16 +582,27 @@ class ParamDiscoveryModule(BaseModule):
         return False, ""
 
     def _select_endpoints_for_probing(self) -> list[Endpoint]:
-        """Select endpoints worth probing (2xx/3xx, not static assets)."""
-        endpoints = [
+        """Select diverse endpoints for probing (unique templates, skip static)."""
+        from prowl.core.exploration import CoverageBitmap
+
+        candidates = [
             ep for ep in self.engine.discovered_endpoints
-            if ep.status_code
-            and ep.status_code < 400
-            and not any(ep.url.endswith(ext) for ext in (".css", ".js", ".png", ".jpg", ".gif", ".svg", ".woff", ".ico"))
+            if ep.status_code and ep.status_code < 400
         ]
-        # Limit to configured max
+        # Deduplicate by URL template -- keep one representative per template
+        seen_templates: set[str] = set()
+        diverse: list[Endpoint] = []
+        for ep in candidates:
+            template = CoverageBitmap._normalize_to_template(ep.url)
+            if template not in seen_templates:
+                seen_templates.add(template)
+                diverse.append(ep)
         max_ep = getattr(self.engine.config, "param_max_endpoints", 100)
-        return endpoints[:max_ep]
+        self.logger.info(
+            "Param probing: %d candidates -> %d unique templates -> %d selected",
+            len(candidates), len(seen_templates), min(len(diverse), max_ep),
+        )
+        return diverse[:max_ep]
 
     def _load_wordlist(self) -> list[str]:
         """Load parameter wordlist from config or use default."""

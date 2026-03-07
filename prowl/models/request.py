@@ -109,6 +109,9 @@ class CrawlResponse(BaseModel):
     page_type: str = ""  # real_content, custom_404, waf_block, error, redirect, auth_required
     tech_indicators: list[str] = Field(default_factory=list)
 
+    # Extensible metadata (CDP metrics, etc.)
+    meta: dict[str, Any] = Field(default_factory=dict)
+
     @property
     def content_hash(self) -> str:
         """SHA256 hash of response body for content-based dedup."""

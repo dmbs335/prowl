@@ -44,6 +44,11 @@ class DashboardBridge:
         # Approval guardrail
         signals.connect(Signal.APPROVAL_REQUESTED, self._on_approval_requested)
         signals.connect(Signal.APPROVAL_RESOLVED, self._on_approval_resolved)
+        # Engine lifecycle
+        signals.connect(Signal.ENGINE_STARTED, self._on_engine_started)
+        signals.connect(Signal.ENGINE_STOPPED, self._on_engine_stopped)
+        signals.connect(Signal.ENGINE_PAUSED, self._on_engine_paused)
+        signals.connect(Signal.ENGINE_RESUMED, self._on_engine_resumed)
 
     def add_client(self, ws: Any) -> None:
         self._ws_clients.append(ws)
@@ -99,6 +104,7 @@ class DashboardBridge:
             "type": "module_state",
             "module": module,
             "state": "error",
+            "error": str(error),
         })
 
     async def _on_endpoint_found(self, **kwargs: Any) -> None:
@@ -183,6 +189,9 @@ class DashboardBridge:
         self._state.stats["requests_failed"] = (
             self._state.stats.get("requests_failed", 0) + 1
         )
+        total = self._state.stats.get("requests_completed", 0) + self._state.stats["requests_failed"]
+        if total % 10 == 0:
+            await self.broadcast({"type": "stats_update", "stats": self._state.stats})
 
     async def _on_tech_detected(self, **kwargs: Any) -> None:
         tech = kwargs.get("tech")
@@ -314,3 +323,23 @@ class DashboardBridge:
             "item_id": item_id,
             "action": action,
         })
+
+    # --- Engine lifecycle handlers ---
+
+    async def _on_engine_started(self, **kwargs: Any) -> None:
+        self._state.add_log("info", "engine", "Crawl started", time.time())
+        await self.broadcast({"type": "engine_state", "state": "running"})
+
+    async def _on_engine_stopped(self, **kwargs: Any) -> None:
+        # Flush final stats
+        await self.broadcast({"type": "stats_update", "stats": self._state.stats})
+        self._state.add_log("info", "engine", "Crawl completed", time.time())
+        await self.broadcast({"type": "engine_state", "state": "stopped"})
+
+    async def _on_engine_paused(self, **kwargs: Any) -> None:
+        self._state.add_log("info", "engine", "Engine paused", time.time())
+        await self.broadcast({"type": "engine_state", "state": "paused"})
+
+    async def _on_engine_resumed(self, **kwargs: Any) -> None:
+        self._state.add_log("info", "engine", "Engine resumed", time.time())
+        await self.broadcast({"type": "engine_state", "state": "running"})

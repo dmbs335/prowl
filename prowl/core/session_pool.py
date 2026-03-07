@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -18,53 +19,58 @@ class SessionPool:
         self._roles: dict[str, AuthRole] = {}
         self._sessions: dict[str, list[AuthSession]] = {}
         self._max_per_role = max_sessions_per_role
+        self._lock = asyncio.Lock()
 
-    def add_role(self, role: AuthRole) -> None:
+    async def add_role(self, role: AuthRole) -> None:
         """Register an auth role."""
-        self._roles[role.name] = role
-        if role.name not in self._sessions:
-            self._sessions[role.name] = []
+        async with self._lock:
+            self._roles[role.name] = role
+            if role.name not in self._sessions:
+                self._sessions[role.name] = []
 
-    def add_session(self, session: AuthSession) -> None:
+    async def add_session(self, session: AuthSession) -> None:
         """Add an active session for a role."""
-        role_name = session.role.name
-        if role_name not in self._roles:
-            self._roles[role_name] = session.role
-        if role_name not in self._sessions:
-            self._sessions[role_name] = []
-        sessions = self._sessions[role_name]
-        if len(sessions) >= self._max_per_role:
-            # Remove oldest
-            sessions.pop(0)
-        sessions.append(session)
+        async with self._lock:
+            role_name = session.role.name
+            if role_name not in self._roles:
+                self._roles[role_name] = session.role
+            if role_name not in self._sessions:
+                self._sessions[role_name] = []
+            sessions = self._sessions[role_name]
+            if len(sessions) >= self._max_per_role:
+                # Remove oldest
+                sessions.pop(0)
+            sessions.append(session)
 
-    def get_session(self, role_name: str) -> AuthSession | None:
+    async def get_session(self, role_name: str) -> AuthSession | None:
         """Get a valid session for the given role, rotating usage."""
-        sessions = self._sessions.get(role_name, [])
-        valid = [s for s in sessions if s.is_valid]
-        if not valid:
-            return None
+        async with self._lock:
+            sessions = self._sessions.get(role_name, [])
+            valid = [s for s in sessions if s.is_valid]
+            if not valid:
+                return None
 
-        # Least recently used
-        valid.sort(key=lambda s: s.last_used)
-        session = valid[0]
-        session.last_used = time.time()
-        session.request_count += 1
-        return session
+            # Least recently used
+            valid.sort(key=lambda s: s.last_used)
+            session = valid[0]
+            session.last_used = time.time()
+            session.request_count += 1
+            return session
 
     def invalidate_session(self, role_name: str, session: AuthSession) -> None:
         """Mark a session as invalid."""
         session.is_valid = False
         logger.info("Session invalidated for role: %s", role_name)
 
-    def update_session_cookies(
+    async def update_session_cookies(
         self, role_name: str, cookies: dict[str, str]
     ) -> None:
         """Update cookies for the most recent session of a role."""
-        sessions = self._sessions.get(role_name, [])
-        valid = [s for s in sessions if s.is_valid]
-        if valid:
-            valid[-1].session_cookies.update(cookies)
+        async with self._lock:
+            sessions = self._sessions.get(role_name, [])
+            valid = [s for s in sessions if s.is_valid]
+            if valid:
+                valid[-1].session_cookies.update(cookies)
 
     @property
     def role_names(self) -> list[str]:
@@ -77,9 +83,9 @@ class SessionPool:
             for sessions in self._sessions.values()
         )
 
-    def get_headers_for_role(self, role_name: str) -> dict[str, str]:
+    async def get_headers_for_role(self, role_name: str) -> dict[str, str]:
         """Get auth headers (cookies + custom headers) for a role."""
-        session = self.get_session(role_name)
+        session = await self.get_session(role_name)
         if not session:
             return {}
 

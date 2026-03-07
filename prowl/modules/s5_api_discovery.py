@@ -179,18 +179,25 @@ class APIDiscoveryModule(BaseModule):
         return current if isinstance(current, dict) else None
 
     def _flatten_schema(
-        self, schema: dict, spec: dict, prefix: str = "", depth: int = 0
+        self, schema: dict, spec: dict, prefix: str = "", depth: int = 0,
+        _visited_refs: set[str] | None = None,
     ) -> list[Parameter]:
         """Flatten an OpenAPI schema into a list of body parameters (dot-notation for nested)."""
         if depth > 5:
             return []
+        if _visited_refs is None:
+            _visited_refs = set()
 
         params: list[Parameter] = []
 
         if "$ref" in schema:
-            resolved = self._resolve_ref(schema["$ref"], spec)
+            ref = schema["$ref"]
+            if ref in _visited_refs:
+                return []  # circular reference
+            _visited_refs.add(ref)
+            resolved = self._resolve_ref(ref, spec)
             if resolved:
-                return self._flatten_schema(resolved, spec, prefix, depth)
+                return self._flatten_schema(resolved, spec, prefix, depth, _visited_refs)
 
         schema_type = schema.get("type", "object")
 
@@ -204,7 +211,7 @@ class APIDiscoveryModule(BaseModule):
                     resolved = self._resolve_ref(prop_schema["$ref"], spec)
                     if resolved and resolved.get("type") == "object":
                         params.extend(self._flatten_schema(
-                            resolved, spec, full_name, depth + 1
+                            resolved, spec, full_name, depth + 1, _visited_refs
                         ))
                         continue
                     prop_type = resolved.get("type", "string") if resolved else "string"
@@ -221,7 +228,7 @@ class APIDiscoveryModule(BaseModule):
             items = schema.get("items", {})
             if items:
                 item_name = f"{prefix}[]" if prefix else "items[]"
-                params.extend(self._flatten_schema(items, spec, item_name, depth + 1))
+                params.extend(self._flatten_schema(items, spec, item_name, depth + 1, _visited_refs))
 
         return params
 

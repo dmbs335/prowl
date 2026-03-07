@@ -237,7 +237,7 @@ class StateTransitionModule(BaseModule):
                 )
 
                 try:
-                    await self.engine.rate_limiter.wait()
+                    await self.engine.rate_limiter.wait(login_form["action"])
                     response = await self.engine.execute(request)
                     self.requests_made += 1
 
@@ -368,7 +368,7 @@ class StateTransitionModule(BaseModule):
             )
 
             try:
-                await self.engine.rate_limiter.wait()
+                await self.engine.rate_limiter.wait(ep.url)
                 response = await self.engine.execute(request)
                 self.requests_made += 1
 

@@ -26,6 +26,7 @@ class DashboardState:
             "s11_input": {"state": "pending", "stats": {}},
             "s12_auth": {"state": "pending", "stats": {}},
             "s13_report": {"state": "pending", "stats": {}},
+            "s14_cdp": {"state": "pending", "stats": {}},
         }
         self.current_phase: int = 0
         self.phase_name: str = ""

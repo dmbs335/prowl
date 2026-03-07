@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-import webbrowser
 from typing import Optional
+
+import io
+import sys
 
 import typer
 from rich.console import Console
@@ -19,7 +21,9 @@ app = typer.Typer(
     help="Prowl - Security Reconnaissance Crawler",
     no_args_is_help=True,
 )
-console = Console()
+# Force UTF-8 output to prevent cp949/cp932 encoding crashes on Windows
+_stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace") if hasattr(sys.stdout, "buffer") else sys.stdout
+console = Console(file=_stdout)
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -69,6 +73,7 @@ def crawl(
     focus_boost: int = typer.Option(10, "--focus-boost", help="Priority boost for focus patterns"),
     llm_model: Optional[str] = typer.Option(None, "--llm-model", help="LLM model (e.g., gpt-4o-mini)"),
     llm_api_key: Optional[str] = typer.Option(None, "--llm-api-key", help="LLM API key"),
+    cdp_profiling: bool = typer.Option(False, "--cdp-profiling", help="Enable CDP security intelligence (hidden APIs, console leaks, headers)"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
 ) -> None:
     """Crawl a target URL with security-focused discovery modules."""
@@ -130,6 +135,7 @@ def crawl(
         focus_boost=focus_boost,
         llm_model=llm_model or "",
         llm_api_key=llm_api_key or "",
+        cdp_profiling=cdp_profiling,
     )
 
     asyncio.run(_run_crawl(config, interactive, pause_on_auth))
@@ -141,39 +147,20 @@ async def _run_crawl(
     pause_on_auth: bool,
 ) -> None:
     """Main async crawl entry point."""
-    from prowl.core.engine import CrawlEngine
     from prowl.core.signals import Signal
-    from prowl.dashboard.bridge import DashboardBridge
-    from prowl.dashboard.state import DashboardState
-    from prowl.intervention.manager import InterventionManager
-    from prowl.pipeline.orchestrator import PipelineOrchestrator
+    from prowl.session import CrawlSession
 
-    from prowl.playbook.engine import PlaybookEngine
+    session = CrawlSession(config)
+    await session.setup()
 
-    engine = CrawlEngine(config)
-    playbook = PlaybookEngine(engine)
-    playbook.connect()
-    engine._playbook = playbook  # Expose for API access
-    intervention_mgr = InterventionManager(engine.signals)
-    dashboard_state = DashboardState()
-    bridge = DashboardBridge(engine.signals, dashboard_state)
+    engine = session.engine
 
-    # Approval guardrail for unsafe methods
-    approval_mgr = None
-    if config.approve_unsafe:
-        from prowl.intervention.approval import ApprovalManager
-
-        approval_mgr = ApprovalManager(engine.signals)
-        engine.set_approval_manager(approval_mgr)
-
-        # Re-submit approved requests back into the queue
-        async def _on_approval_resolved(**kwargs):
-            action = kwargs.get("action")
-            request = kwargs.get("request")
-            if action == "approved" and request:
-                await engine.submit(request)
-
-        engine.signals.connect(Signal.APPROVAL_RESOLVED, _on_approval_resolved)
+    if config.approve_unsafe and not config.dashboard and not interactive:
+        console.print(
+            "[yellow]Warning:[/] --approve-unsafe requires --dashboard or -i to approve requests. "
+            "Disabling approval guardrail for this run."
+        )
+        config.approve_unsafe = False
 
     console.print(f"\n[bold blue]Prowl[/] v{__version__}")
     console.print(f"Target: [cyan]{config.target_url}[/]")
@@ -184,18 +171,18 @@ async def _run_crawl(
         console.print(f"Modules: {', '.join(config.modules)}")
     console.print()
 
-    # Start engine
-    await engine.startup()
-
     # Start dashboard if requested
     dashboard_task = None
     if config.dashboard:
+        import webbrowser
+
         from prowl.dashboard.server import start_dashboard
 
         dashboard_task = asyncio.create_task(
             start_dashboard(
-                engine, dashboard_state, bridge, intervention_mgr,
-                config.dashboard_port, approval_manager=approval_mgr,
+                engine, session.dashboard_state, session.bridge,
+                session.intervention_mgr, config.dashboard_port,
+                approval_manager=session.approval_mgr,
             )
         )
         console.print(
@@ -208,8 +195,10 @@ async def _run_crawl(
     if interactive:
         from prowl.intervention.interactive import InteractiveSession
 
-        session = InteractiveSession(engine, intervention_mgr, approval_mgr)
-        interactive_task = asyncio.create_task(session.run())
+        isession = InteractiveSession(
+            engine, session.intervention_mgr, session.approval_mgr
+        )
+        interactive_task = asyncio.create_task(isession.run())
 
     # Pause engine when intervention requested (if pause_on_auth)
     if pause_on_auth:
@@ -220,22 +209,39 @@ async def _run_crawl(
             )
         engine.signals.connect(Signal.INTERVENTION_REQUESTED, on_intervention)
 
-    # Run the pipeline
-    orchestrator = PipelineOrchestrator(engine)
-    start = time.time()
+    # Wire progress signal handlers for CLI output
+    _req_counter = {"n": 0}
 
+    async def _on_phase_done(**kwargs):
+        phase = kwargs.get("phase", "")
+        stats = engine.get_stats()
+        console.print(
+            f"  [dim]Phase[/] [bold]{phase}[/] [dim]done[/] "
+            f"({stats['endpoints_found']} endpoints, "
+            f"{stats['requests_completed']} reqs)"
+        )
+
+    async def _on_req_done(**kwargs):
+        _req_counter["n"] += 1
+        if _req_counter["n"] % 100 == 0:
+            stats = engine.get_stats()
+            console.print(
+                f"  [dim]...[/] {stats['requests_completed']} OK, "
+                f"{stats['requests_failed']} failed, "
+                f"{stats['endpoints_found']} endpoints"
+            )
+
+    engine.signals.connect(Signal.PHASE_COMPLETED, _on_phase_done)
+    engine.signals.connect(Signal.REQUEST_COMPLETED, _on_req_done)
+
+    # Run the pipeline
     try:
-        await orchestrator.run()
+        await session.run_pipeline()
     except (KeyboardInterrupt, asyncio.CancelledError):
         console.print("\n[yellow]Interrupted.[/]")
     finally:
-        elapsed = time.time() - start
-
-        # Generate output
-        await _write_output(config, engine, orchestrator, elapsed)
-
-        # Shutdown
-        await engine.shutdown()
+        await session.write_output()
+        await session.shutdown()
 
         if dashboard_task:
             dashboard_task.cancel()
@@ -243,90 +249,15 @@ async def _run_crawl(
             interactive_task.cancel()
 
     # Summary
-    console.print(f"\n[bold green]Done![/] ({elapsed:.1f}s)")
+    console.print(f"\n[bold green]Done![/] ({session.elapsed:.1f}s)")
     console.print(f"  Endpoints: {engine.endpoints_found}")
     console.print(f"  Requests: {engine.requests_completed} ({engine.requests_failed} failed)")
     console.print(f"  Output: {config.output_dir}/")
 
     # Playbook summary
-    pb_result = playbook.get_result()
+    pb_result = session.playbook.get_result()
     if pb_result.findings:
         _print_playbook_summary(pb_result)
-
-
-async def _write_output(
-    config: CrawlConfig,
-    engine: CrawlEngine,
-    orchestrator: PipelineOrchestrator,
-    elapsed: float,
-) -> None:
-    """Write output in all configured formats."""
-    from prowl.models.report import ModuleReport
-
-    # Build module reports with per-module timing
-    module_reports = []
-    for name, stats in orchestrator.get_module_stats().items():
-        module_reports.append(
-            ModuleReport(
-                module_name=name,
-                endpoints_found=stats.get("endpoints_found", 0),
-                requests_made=stats.get("requests_made", 0),
-                errors=stats.get("errors", 0),
-                duration_seconds=stats.get("duration_seconds", 0.0),
-            )
-        )
-
-    # Use attack_surface.build_report() to include ALL data
-    # (tech_stack, auth_boundaries, secrets, input_vectors, risk_summary)
-    report = engine.attack_surface.build_report(
-        target=config.target_url,
-        scan_duration=elapsed,
-    )
-    report.module_reports = module_reports
-
-    formats = config.output_formats
-
-    if "json" in formats:
-        from prowl.output.json_output import JsonOutput
-        out = JsonOutput(config.output_dir)
-        for ep in engine.discovered_endpoints:
-            await out.write_endpoint(ep)
-        await out.finalize(report)
-
-    if "markdown" in formats:
-        from prowl.output.markdown_output import MarkdownOutput
-        out = MarkdownOutput(config.output_dir)
-        for ep in engine.discovered_endpoints:
-            await out.write_endpoint(ep)
-        await out.finalize(report)
-
-    if "html" in formats:
-        from prowl.output.html_output import HtmlOutput
-        out = HtmlOutput(config.output_dir)
-        for ep in engine.discovered_endpoints:
-            await out.write_endpoint(ep)
-        await out.finalize(report)
-
-    if "burp" in formats:
-        from prowl.output.burp_output import BurpOutput
-        out = BurpOutput(config.output_dir)
-        for ep in engine.discovered_endpoints:
-            await out.write_endpoint(ep)
-        await out.finalize(report)
-
-    if "postman" in formats:
-        from prowl.output.postman_output import PostmanOutput
-        out = PostmanOutput(config.output_dir)
-        for ep in engine.discovered_endpoints:
-            await out.write_endpoint(ep)
-        await out.finalize(report)
-
-    if "openapi" in formats:
-        from prowl.output.openapi_output import OpenAPIOutput
-        out = OpenAPIOutput(config.output_dir)
-        for ep in engine.discovered_endpoints:
-            await out.write_endpoint(ep)
-        await out.finalize(report)
 
 
 def _print_playbook_summary(result: Any) -> None:

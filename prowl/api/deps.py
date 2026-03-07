@@ -23,6 +23,7 @@ class APIState:
     bridge: DashboardBridge
     intervention_manager: InterventionManager
     orchestrator: PipelineOrchestrator | None = None
+    session: Any = None
     _background_task: asyncio.Task[Any] | None = field(
         default=None, repr=False
     )

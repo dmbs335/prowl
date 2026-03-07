@@ -310,18 +310,16 @@ async def list_transactions(
     if status_min is not None or status_max is not None:
         status_range = (status_min or 0, status_max or 999)
 
-    txns = await store.query(
+    filter_kwargs = dict(
         url_pattern=url_pattern,
         source_module=source_module,
         page_type=page_type,
         content_type_contains=content_type,
         status_range=status_range,
-        limit=offset + limit,
     )
 
-    # Manual offset since SQLite query doesn't support it directly
-    total_estimate = len(txns)
-    page = txns[offset:]
+    total = await store.count_filtered(**filter_kwargs)
+    txns = await store.query(**filter_kwargs, limit=limit, offset=offset)
 
     items = [
         TransactionSummary(
@@ -335,15 +333,15 @@ async def list_transactions(
             depth=txn.depth,
             page_type=txn.page_type,
         )
-        for txn in page
+        for txn in txns
     ]
 
     return PaginatedResponse(
         items=items,
-        total=total_estimate,
+        total=total,
         offset=offset,
         limit=limit,
-        has_more=False,
+        has_more=(offset + limit) < total,
     )
 
 

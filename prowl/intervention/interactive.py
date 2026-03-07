@@ -90,21 +90,21 @@ class InteractiveSession:
         if self._manager.has_pending:
             print(f"  Interventions: {len(self._manager.pending_interventions)} pending")
 
-    def _inject_cookies(self, cookie_string: str) -> None:
+    async def _inject_cookies(self, cookie_string: str) -> None:
         cookies = BrowserBridge.parse_cookie_string(cookie_string)
         if cookies:
             for role_name in self._engine.sessions.role_names:
-                self._engine.sessions.update_session_cookies(role_name, cookies)
+                await self._engine.sessions.update_session_cookies(role_name, cookies)
             print(f"  Injected {len(cookies)} cookies.")
         else:
             print("  Usage: cookies name=value; name2=value2")
 
-    def _inject_from_curl(self, curl_command: str) -> None:
+    async def _inject_from_curl(self, curl_command: str) -> None:
         result = BrowserBridge.parse_curl_command(curl_command)
         cookies = result.get("cookies", {})
         if cookies:
             for role_name in self._engine.sessions.role_names:
-                self._engine.sessions.update_session_cookies(role_name, cookies)
+                await self._engine.sessions.update_session_cookies(role_name, cookies)
             print(f"  Extracted {len(cookies)} cookies from curl command.")
         else:
             print("  No cookies found in curl command.")

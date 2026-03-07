@@ -78,7 +78,7 @@ DEFAULT_PHASES: list[Phase] = [
     ),
     Phase(
         name="classification",
-        modules=["s11_input", "s12_auth"],
+        modules=["s11_input", "s12_auth", "s14_cdp"],
         depends_on=["param_discovery", "fingerprinting"],
         parallel=True,
     ),

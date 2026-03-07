@@ -75,7 +75,7 @@ code{{background:#242736;padding:2px 6px;border-radius:4px;font-size:12px}}
 </head>
 <body>
 <h1>Prowl Crawl Report</h1>
-<p>Target: <code>{_esc(r.target) if r else 'N/A'}</code> &middot; Duration: {r.duration_seconds:.1f}s if r else ''</p>
+<p>Target: <code>{_esc(r.target) if r else 'N/A'}</code> &middot; Duration: {f'{r.scan_duration:.1f}s' if r else ''}</p>
 
 <div class="stats">
     <div class="stat"><div class="val">{len(self._endpoints)}</div><div class="lbl">Endpoints</div></div>

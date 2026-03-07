@@ -35,11 +35,14 @@ class LiteLLMProvider:
             try:
                 from litellm import acompletion
 
-                response = await acompletion(
-                    model=self._model,
-                    messages=[{"role": "user", "content": prompt}],
-                    api_key=self._api_key or None,
-                    **kwargs,
+                response = await asyncio.wait_for(
+                    acompletion(
+                        model=self._model,
+                        messages=[{"role": "user", "content": prompt}],
+                        api_key=self._api_key or None,
+                        **kwargs,
+                    ),
+                    timeout=120.0,
                 )
                 result = response.choices[0].message.content or ""
                 self._cache[cache_key] = result
@@ -61,17 +64,16 @@ class LiteLLMProvider:
         try:
             return json.loads(result)
         except json.JSONDecodeError:
-            # Try to extract JSON from markdown code blocks
-            if "```json" in result:
-                start = result.index("```json") + 7
-                end = result.index("```", start)
-                return json.loads(result[start:end].strip())
-            if "```" in result:
-                start = result.index("```") + 3
-                end = result.index("```", start)
-                return json.loads(result[start:end].strip())
+            # Try to extract JSON from markdown code blocks (safe regex)
+            import re
+            m = re.search(r"```(?:json)?\s*\n?(.*?)```", result, re.DOTALL)
+            if m:
+                try:
+                    return json.loads(m.group(1).strip())
+                except json.JSONDecodeError:
+                    pass
             logger.warning("Failed to parse LLM JSON response")
             return {}
 
     def _cache_key(self, prompt: str) -> str:
-        return hashlib.sha256(f"{self._model}:{prompt}".encode()).hexdigest()[:16]
+        return hashlib.sha256(f"{self._model}:{prompt}".encode()).hexdigest()[:32]

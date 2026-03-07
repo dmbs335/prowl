@@ -91,6 +91,10 @@ class Signal(StrEnum):
     AUTH_LOGIN_ATTEMPTED = auto()
     STRATEGY_ADJUSTED = auto()
 
+    # CDP profiling
+    CDP_METRICS_COLLECTED = auto()
+    CDP_ANALYSIS_COMPLETE = auto()
+
 
 class SignalBus:
     """Async event bus that dispatches signals to registered handlers."""
@@ -119,7 +123,7 @@ class SignalBus:
         for handler in handlers:
             tasks.append(self._safe_call(handler, signal, **kwargs))
 
-        await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _safe_call(
         self, handler: SignalHandler, signal: Signal, **kwargs: Any

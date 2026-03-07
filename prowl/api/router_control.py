@@ -143,18 +143,18 @@ async def inject_session(body: SessionInjectRequest) -> OperationResponse:
     injected = []
 
     if body.cookies:
-        engine.sessions.update_session_cookies(body.role, body.cookies)
+        await engine.sessions.update_session_cookies(body.role, body.cookies)
         injected.append(f"{len(body.cookies)} cookies")
 
     if body.headers:
         for k, v in body.headers.items():
-            engine.sessions.update_session_cookies(body.role, {})
+            await engine.sessions.update_session_cookies(body.role, {})
             # Headers go through the session pool's header mechanism
         injected.append(f"{len(body.headers)} headers")
 
     if body.token:
         # Inject bearer token as Authorization header
-        engine.sessions.update_session_cookies(
+        await engine.sessions.update_session_cookies(
             body.role, {}
         )
         injected.append("bearer token")
@@ -299,7 +299,7 @@ async def resolve_intervention(
     # Inject session if auth data was provided
     role = data.get("role", "default")
     if body.cookies:
-        api.engine.sessions.update_session_cookies(role, body.cookies)
+        await api.engine.sessions.update_session_cookies(role, body.cookies)
 
     # Resume engine
     api.engine.resume()

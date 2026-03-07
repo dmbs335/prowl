@@ -185,6 +185,7 @@ class TransactionStore:
         content_type_contains: str | None = None,
         status_range: tuple[int, int] | None = None,
         limit: int = 1000,
+        offset: int = 0,
     ) -> list[HttpTransaction]:
         """Query transactions with filters."""
         if not self._db:
@@ -212,14 +213,56 @@ class TransactionStore:
             params.extend(status_range)
 
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-        sql = f"SELECT * FROM transactions {where} ORDER BY timestamp LIMIT ?"
+        sql = f"SELECT * FROM transactions {where} ORDER BY timestamp LIMIT ? OFFSET ?"
         params.append(limit)
+        params.append(offset)
 
         results: list[HttpTransaction] = []
         async with self._db.execute(sql, params) as cursor:
             async for row in cursor:
                 results.append(self._row_to_txn(row))
         return results
+
+    async def count_filtered(
+        self,
+        *,
+        url_pattern: str | None = None,
+        source_module: str | None = None,
+        page_type: str | None = None,
+        content_type_contains: str | None = None,
+        status_range: tuple[int, int] | None = None,
+    ) -> int:
+        """Count transactions matching filters."""
+        if not self._db:
+            return 0
+
+        await self.flush()
+
+        conditions: list[str] = []
+        params: list[Any] = []
+
+        if url_pattern:
+            conditions.append("request_url LIKE ?")
+            params.append(f"%{url_pattern}%")
+        if source_module:
+            conditions.append("source_module = ?")
+            params.append(source_module)
+        if page_type:
+            conditions.append("page_type = ?")
+            params.append(page_type)
+        if content_type_contains:
+            conditions.append("response_content_type LIKE ?")
+            params.append(f"%{content_type_contains}%")
+        if status_range:
+            conditions.append("response_status >= ? AND response_status <= ?")
+            params.extend(status_range)
+
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT COUNT(*) FROM transactions {where}"
+
+        async with self._db.execute(sql, params) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
 
     async def get_all_js_responses(self) -> AsyncIterator[HttpTransaction]:
         """Yield all transactions where content_type contains 'javascript'."""

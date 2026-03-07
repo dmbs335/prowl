@@ -300,7 +300,7 @@ async def p3_response_semantics(engine: CrawlEngine, exploration: dict[str, Any]
             ))
             # Register soft-404 hashes in dedup to filter future responses
             for h in soft_404_hashes:
-                engine.dedup.mark_seen_content(h)
+                await engine.dedup.mark_seen_content(h)
 
         # False positive detection: 200 OK with error keywords in body
         false_positive_count = 0

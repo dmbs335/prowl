@@ -16,9 +16,9 @@ import re
 import logging
 from typing import Any
 
-from prowl.core.infra_signatures import InfraDetection
+from prowl.signatures.infra import InfraDetection
 from prowl.core.signals import Signal
-from prowl.core.tech_signatures import (
+from prowl.signatures.tech import (
     BODY_SIGNATURES,
     META_SIGNATURES,
     SCRIPT_SRC_SIGNATURES,
@@ -151,6 +151,9 @@ class TechFingerprinterModule(BaseModule):
             txn_count, len(seen_bodies), skipped_soft404,
         )
 
+        # Favicon hash analysis
+        await self._analyse_favicon_hashes()
+
         # Store results
         await self._store_results()
 
@@ -280,6 +283,60 @@ class TechFingerprinterModule(BaseModule):
                 key, InfraDetection(component=usig.component, category=usig.category)
             )
             det.add_evidence("url_path", url[:120], usig.confidence)
+
+    # ------------------------------------------------------------------
+    # Favicon hash analysis
+    # ------------------------------------------------------------------
+
+    # Known favicon hashes: md5(body) → (component, category, confidence)
+    _FAVICON_HASHES: dict[str, tuple[str, str, float]] = {
+        # Spring Boot (leaf icon)
+        "d41d8cd98f00b204e9800998ecf8427e": ("spring_boot", "framework", 0.50),  # empty favicon (dev mode)
+        # Apache Tomcat
+        "0488faca4c19046b94d07c3ee83cf9d6": ("tomcat", "server", 0.85),
+        # Jenkins
+        "15f45e137e36488380ed76a2523849b7": ("jenkins", "tool", 0.90),
+        # Grafana
+        "c77816a4f26e549b02c06540a0dc9cb5": ("grafana", "tool", 0.90),
+        # Kibana / ELK
+        "8bac70891a8a4a23a1cbab1a8e6c3452": ("kibana", "tool", 0.85),
+        # GitLab
+        "72a2671afb69c91a80c1b60445e73dfc": ("gitlab", "tool", 0.90),
+        # Jira
+        "8b3f7f6a38d3fe65a5f05c870e9af0e2": ("jira", "tool", 0.90),
+        # WordPress (default W icon)
+        "a28b06e1c01b7c97b2a4eb33d0c3b6e2": ("wordpress", "cms", 0.70),
+        # phpMyAdmin
+        "2cc3e05076b16bf76ea3277b0b4a8438": ("phpmyadmin", "tool", 0.90),
+    }
+
+    _FAVICON_RE = re.compile(r"favicon\.ico|/favicon[^/]*\.(?:ico|png|svg)", re.I)
+
+    async def _analyse_favicon_hashes(self) -> None:
+        """Match favicon bodies against known hash database."""
+        async for txn in self.engine.transaction_store.get_all_transactions():
+            if not self._running:
+                break
+            if txn.response_status != 200:
+                continue
+            if not self._FAVICON_RE.search(txn.request_url):
+                continue
+            body = txn.response_body
+            if not body or len(body) < 16:
+                continue
+
+            h = hashlib.md5(body).hexdigest()
+            match = self._FAVICON_HASHES.get(h)
+            if not match:
+                continue
+
+            comp, cat, conf = match
+            key = f"{comp}:{cat}"
+            det = self._detections.setdefault(
+                key, InfraDetection(component=comp, category=cat)
+            )
+            det.add_evidence("favicon_hash", f"md5={h} ({comp})", conf)
+            self.logger.info("Favicon hash match: %s → %s", h[:12], comp)
 
     # ------------------------------------------------------------------
     # Store results

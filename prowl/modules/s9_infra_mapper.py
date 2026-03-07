@@ -15,11 +15,14 @@ from collections import Counter
 from typing import Any
 from urllib.parse import urlparse
 
-from prowl.core.infra_signatures import (
+from prowl.signatures.infra import (
     CATEGORY_LAYER_ORDER,
     CNAME_PATTERNS,
     COOKIE_SIGNATURES,
     ERROR_PAGE_SIGNATURES,
+    HEADER_ORDER_SIGNATURES,
+    HEADER_PREFIX_SIGNATURES,
+    HEADER_PRESENCE_SIGNATURES,
     HEADER_SIGNATURES,
     InfraDetection,
 )
@@ -47,6 +50,8 @@ class InfraMapperModule(BaseModule):
         self._detections: dict[str, InfraDetection] = {}
         self._server_values: Counter[str] = Counter()
         self._via_chains: list[list[str]] = []
+        self._header_order_votes: Counter[str] = Counter()
+        self._header_order_txn_count = 0
         self._cache_hits = 0
         self._cache_misses = 0
         self._age_seen = False
@@ -69,6 +74,9 @@ class InfraMapperModule(BaseModule):
             headers_lower = {k.lower(): v for k, v in txn.response_headers.items()}
 
             self._analyse_headers(headers_lower, txn.request_url)
+            self._analyse_header_prefixes(headers_lower)
+            self._analyse_header_order(headers_lower)
+            self._analyse_header_presence(headers_lower)
             self._analyse_cookies(headers_lower)
             self._analyse_server_diversity(headers_lower)
             self._analyse_via_chain(headers_lower)
@@ -84,6 +92,9 @@ class InfraMapperModule(BaseModule):
 
         # Phase D: server header diversity → LB inference
         self._infer_load_balancer()
+
+        # Phase D2: header-order voting → weak signal aggregation
+        self._aggregate_header_order()
 
         # Phase F: cache topology summary
         self._summarise_cache()
@@ -148,6 +159,115 @@ class InfraMapperModule(BaseModule):
             )
 
     # ------------------------------------------------------------------
+    # Phase B2: Header-prefix analysis (e.g. x-px-*, x-amz-*)
+    # ------------------------------------------------------------------
+
+    def _analyse_header_prefixes(self, headers: dict[str, str]) -> None:
+        for psig in HEADER_PREFIX_SIGNATURES:
+            for hdr_name in headers:
+                if not hdr_name.startswith(psig.header_prefix):
+                    continue
+                key = f"{psig.component}:{psig.category}"
+                det = self._detections.setdefault(
+                    key,
+                    InfraDetection(
+                        component=psig.component, category=psig.category
+                    ),
+                )
+                det.add_evidence(
+                    "header_prefix",
+                    f"{hdr_name}: {headers[hdr_name][:80]}",
+                    psig.confidence,
+                )
+                break  # one match per prefix signature per response
+
+    # ------------------------------------------------------------------
+    # Phase B3: Header ordering analysis
+    # ------------------------------------------------------------------
+
+    _STANDARD_HEADERS = frozenset({
+        "date", "server", "content-type", "content-length",
+        "connection", "keep-alive", "transfer-encoding",
+        "cache-control", "pragma", "expires", "etag",
+        "last-modified", "vary", "x-powered-by", "alt-svc",
+        "strict-transport-security", "content-encoding",
+        "x-content-type-options", "x-frame-options",
+    })
+
+    def _analyse_header_order(self, headers: dict[str, str]) -> None:
+        """Check if the order of standard response headers matches known patterns."""
+        # Extract ordered list of standard headers present in this response
+        ordered = [k for k in headers if k in self._STANDARD_HEADERS]
+        if len(ordered) < 2:
+            return
+        self._header_order_txn_count += 1
+
+        for osig in HEADER_ORDER_SIGNATURES:
+            if self._is_subsequence(osig.order, ordered):
+                self._header_order_votes[osig.component] += 1
+
+    @staticmethod
+    def _is_subsequence(pattern: tuple[str, ...], sequence: list[str]) -> bool:
+        """Check if *pattern* appears as a subsequence in *sequence*."""
+        it = iter(sequence)
+        return all(p in it for p in pattern)
+
+    def _aggregate_header_order(self) -> None:
+        """Turn header-order voting results into detections."""
+        if self._header_order_txn_count < 3:
+            return  # not enough data
+        for comp, votes in self._header_order_votes.most_common(1):
+            ratio = votes / self._header_order_txn_count
+            if ratio < 0.50:
+                continue  # no dominant pattern
+            # Find the matching signature for its category and confidence
+            for osig in HEADER_ORDER_SIGNATURES:
+                if osig.component != comp:
+                    continue
+                key = f"{osig.component}:{osig.category}"
+                det = self._detections.setdefault(
+                    key,
+                    InfraDetection(
+                        component=osig.component, category=osig.category
+                    ),
+                )
+                det.add_evidence(
+                    "header_order",
+                    f"Header ordering matched {comp} in {votes}/{self._header_order_txn_count} responses ({ratio:.0%})",
+                    osig.confidence,
+                )
+                break
+
+    # ------------------------------------------------------------------
+    # Phase B4: Header presence/absence analysis
+    # ------------------------------------------------------------------
+
+    def _analyse_header_presence(self, headers: dict[str, str]) -> None:
+        """Detect servers by which standard headers exist or are missing."""
+        for psig in HEADER_PRESENCE_SIGNATURES:
+            if not all(h in headers for h in psig.present):
+                continue
+            if not all(h not in headers for h in psig.absent):
+                continue
+            key = f"{psig.component}:{psig.category}"
+            det = self._detections.setdefault(
+                key,
+                InfraDetection(
+                    component=psig.component, category=psig.category
+                ),
+            )
+            present_str = ", ".join(psig.present) if psig.present else ""
+            absent_str = ", ".join(psig.absent) if psig.absent else ""
+            detail_parts = []
+            if present_str:
+                detail_parts.append(f"has [{present_str}]")
+            if absent_str:
+                detail_parts.append(f"missing [{absent_str}]")
+            det.add_evidence(
+                "header_presence", " & ".join(detail_parts), psig.confidence
+            )
+
+    # ------------------------------------------------------------------
     # Phase C: Cookie analysis
     # ------------------------------------------------------------------
 
@@ -156,12 +276,23 @@ class InfraMapperModule(BaseModule):
         if not set_cookie:
             return
 
-        # Extract cookie names (Set-Cookie: name=value; ...)
+        # Extract cookie names from comma-joined Set-Cookie values.
+        # httpx joins multiple Set-Cookie headers with ", " which
+        # collides with commas inside Expires dates
+        # (e.g. "Expires=Thu, 01 Dec 2025 ...").  To avoid mis-parsing
+        # date fragments as cookie names: isolate the name=value
+        # portion (before first ";"), then require the name to start
+        # with an ASCII letter.
         for part in set_cookie.split(","):
             part = part.strip()
             if "=" not in part:
                 continue
-            cookie_name = part.split("=", 1)[0].strip()
+            name_value = part.split(";", 1)[0].strip()
+            if "=" not in name_value:
+                continue
+            cookie_name = name_value.split("=", 1)[0].strip()
+            if not cookie_name or not cookie_name[0].isalpha():
+                continue
 
             for csig in COOKIE_SIGNATURES:
                 matched = False

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import Counter
 from typing import Any
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse
 
 from prowl.core.signals import Signal
 from prowl.models.request import CrawlRequest, FormData, FormField, HttpMethod, normalize_url
@@ -60,6 +60,8 @@ class ActiveSpiderModule(BaseModule):
         super().__init__(engine)
         # Partial Order Reduction: track seen (depth, prefix) pairs
         self._por_seen_prefix: dict[tuple[int, str], bool] = {}
+        # Form dedup: track submitted form fingerprints (action|method|fields)
+        self._submitted_forms: set[str] = set()
 
     async def run(self, **kwargs: Any) -> None:
         self._running = True
@@ -214,26 +216,33 @@ class ActiveSpiderModule(BaseModule):
 
         # Enqueue form targets (with smart form submission)
         for form in response.forms:
+            # Form dedup: skip already-submitted forms (same action+method+fields)
+            form_fp = f"{normalize_url(form.action)}|{form.method}|{','.join(sorted(f.name for f in form.fields))}"
+            already_submitted = form_fp in self._submitted_forms
+
             if self.engine.config.smart_form_submission:
                 form_type = self._classify_form(form)
-                if form_type in ("search", "filter", "generic"):
+                if form_type in ("search", "filter", "generic") and not already_submitted:
                     filled_req = self._build_form_request(form, next_depth)
                     if filled_req:
+                        self._submitted_forms.add(form_fp)
                         await self.engine.submit(filled_req)
                 # Always emit FORM_FOUND so other modules can handle unsafe forms
                 await self.engine.signals.emit(
                     Signal.FORM_FOUND, form=form, form_type=form_type,
                 )
             else:
-                # Legacy: just visit form action URL
-                form_request = CrawlRequest(
-                    url=form.action,
-                    method=form.method,
-                    source_module=self.name,
-                    depth=next_depth,
-                    priority=8,
-                )
-                await self.engine.submit(form_request)
+                # Legacy: just visit form action URL (also dedup)
+                if not already_submitted:
+                    self._submitted_forms.add(form_fp)
+                    form_request = CrawlRequest(
+                        url=form.action,
+                        method=form.method,
+                        source_module=self.name,
+                        depth=next_depth,
+                        priority=8,
+                    )
+                    await self.engine.submit(form_request)
                 await self.engine.signals.emit(Signal.FORM_FOUND, form=form)
 
         # Track JS files
@@ -306,10 +315,15 @@ class ActiveSpiderModule(BaseModule):
                 filled[field.name] = "test"
 
         if form.method == HttpMethod.GET:
-            # Append as query string
+            # Merge form fields with existing query params (avoid duplicates)
             action = normalize_url(form.action)
-            sep = "&" if "?" in action else "?"
-            url = action + sep + urlencode(filled)
+            parsed_action = urlparse(action)
+            existing_params = dict(parse_qs(parsed_action.query, keep_blank_values=True))
+            # Flatten parse_qs lists to single values, then overlay with filled
+            merged: dict[str, str] = {k: v[0] for k, v in existing_params.items()}
+            merged.update(filled)
+            base = parsed_action._replace(query="").geturl()
+            url = base + ("" if base.endswith("?") else "?") + urlencode(merged)
             return CrawlRequest(
                 url=url,
                 method=HttpMethod.GET,

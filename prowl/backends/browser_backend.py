@@ -32,6 +32,17 @@ class BrowserBackend:
         self._user_agent = user_agent
         self._browser: Any = None
         self._playwright: Any = None
+        self._cdp_config: dict[str, Any] | None = None
+
+    def set_instrumentor(self, instrumentor: Any) -> None:
+        """Store CDP config from a template instrumentor for per-request use."""
+        # Extract config so we create a fresh instrumentor per request
+        self._cdp_config = {
+            "collect_network": instrumentor._collect_network,
+            "collect_websockets": instrumentor._collect_websockets,
+            "collect_console": instrumentor._collect_console,
+            "max_network_entries": instrumentor._max_network_entries,
+        }
 
     async def startup(self) -> None:
         try:
@@ -59,12 +70,23 @@ class BrowserBackend:
         if not self._browser:
             raise RuntimeError("Browser not started. Call startup() first.")
 
-        context = await self._browser.new_context(
-            user_agent=self._user_agent,
-        )
-        page = await context.new_page()
+        context = None
+        page = None
+        instrumentor = None
 
         try:
+            context = await self._browser.new_context(
+                user_agent=self._user_agent,
+            )
+            page = await context.new_page()
+
+            # CDP: create per-request instrumentor and attach before navigation
+            if self._cdp_config:
+                from prowl.backends.cdp_instrumentor import CDPInstrumentor
+
+                instrumentor = CDPInstrumentor(**self._cdp_config)
+                await instrumentor.attach(page)
+
             response = await page.goto(
                 request.url,
                 timeout=int(self._timeout * 1000),
@@ -77,6 +99,11 @@ class BrowserBackend:
             # Wait for dynamic content
             await page.wait_for_load_state("networkidle")
 
+            # CDP: collect after navigation
+            cdp_metrics = None
+            if instrumentor:
+                cdp_metrics = await instrumentor.collect()
+
             # Get rendered HTML
             rendered_dom = await page.content()
             body = rendered_dom.encode("utf-8")
@@ -87,7 +114,7 @@ class BrowserBackend:
             forms = await self._extract_forms(page, request.url)
             js_files = await self._extract_js(page, request.url)
 
-            return CrawlResponse(
+            crawl_response = CrawlResponse(
                 request=request,
                 status_code=status_code,
                 headers=headers,
@@ -100,14 +127,25 @@ class BrowserBackend:
                 rendered_dom=rendered_dom,
             )
 
+            if cdp_metrics:
+                cdp_metrics.request_url = request.url
+                cdp_metrics.final_url = page.url
+                crawl_response.meta["cdp_metrics"] = cdp_metrics
+
+            return crawl_response
+
         except Exception as e:
             logger.warning("Browser error for %s: %s", request.url, e)
             return CrawlResponse(
                 request=request, status_code=0, url_final=request.url
             )
         finally:
-            await page.close()
-            await context.close()
+            if instrumentor:
+                await instrumentor.detach()
+            if page:
+                await page.close()
+            if context:
+                await context.close()
 
     async def _extract_links(self, page: Any, base_url: str) -> list[LinkData]:
         """Extract links from rendered page via JS evaluation."""

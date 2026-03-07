@@ -34,13 +34,15 @@ class CoverageBitmap:
     New tuples = "interesting" responses worth exploring further.
     """
 
+    _MAX_CORPUS_SIZE = 10_000
+
     def __init__(
         self,
         saturation_window: int = 200,
         saturation_threshold: float = 0.02,
     ) -> None:
         self._seen: set[tuple[str, str, int, str, str]] = set()
-        self._corpus: list[dict[str, Any]] = []  # Interesting requests/responses
+        self._corpus: deque[dict[str, Any]] = deque(maxlen=self._MAX_CORPUS_SIZE)
         self._total_checked: int = 0
         # Saturation detection (sliding window)
         self._sat_window: deque[bool] = deque(maxlen=saturation_window)
@@ -424,8 +426,10 @@ class HindsightFeedback:
     - 401 → explicit auth required
     """
 
+    _MAX_INSIGHTS = 5_000
+
     def __init__(self) -> None:
-        self._insights: list[HindsightInsight] = []
+        self._insights: deque[HindsightInsight] = deque(maxlen=self._MAX_INSIGHTS)
 
     @property
     def insights(self) -> list[HindsightInsight]:

@@ -37,7 +37,7 @@ class RequestQueue:
 
     async def put(self, request: CrawlRequest) -> bool:
         """Add a request to the queue. Returns False if duplicate or auto-merged."""
-        if self._dedup.check_and_mark_url(request.fingerprint):
+        if await self._dedup.check_and_mark_url(request.fingerprint):
             self._total_dropped += 1
             return False
 
@@ -92,6 +92,10 @@ class RequestQueue:
         """Return current auto-merge rules."""
         return dict(self._template_caps)
 
+    def reset_template_counts(self) -> None:
+        """Reset per-template counters so auto-merge budgets refresh (e.g. between phases)."""
+        self._template_counts.clear()
+
     @property
     def total_auto_merged(self) -> int:
         return self._total_auto_merged
@@ -126,19 +130,11 @@ class RequestQueue:
     async def peek_all(self) -> list[CrawlRequest]:
         """Non-destructive snapshot of all queued requests.
 
-        Drains the internal queue and re-inserts all items.
-        Use sparingly -- briefly holds items outside the queue.
+        Reads the internal heap directly instead of draining/refilling.
         """
         async with self._bulk_lock:
-            items: list[tuple[int, int, CrawlRequest]] = []
-            while not self._queue.empty():
-                try:
-                    items.append(self._queue.get_nowait())
-                except asyncio.QueueEmpty:
-                    break
-            for item in items:
-                await self._queue.put(item)
-            return [req for _, _, req in items]
+            # PriorityQueue wraps a list-based heap at _queue._queue
+            return [req for _, _, req in self._queue._queue]
 
     async def drain_matching(
         self, predicate: Callable[[CrawlRequest], bool]

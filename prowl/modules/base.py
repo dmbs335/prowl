@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from prowl.core.context import DiscoveryContext
     from prowl.core.engine import CrawlEngine
 
 
@@ -17,9 +18,13 @@ class BaseModule(ABC):
     description: str = ""
 
     def __init__(self, engine: CrawlEngine) -> None:
-        self.engine = engine
+        self.engine = engine  # Backward compat: full engine access
         self.logger = logging.getLogger(f"prowl.modules.{self.name}")
         self._running = False
+
+        # Narrow interface for new code
+        from prowl.core.context import DiscoveryContext
+        self.ctx: DiscoveryContext = DiscoveryContext(engine)
 
         # Module-level stats
         self.requests_made = 0

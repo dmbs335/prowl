@@ -79,8 +79,8 @@ class AuthCrawlModule(BaseModule):
 
         # Register session
         session = AuthSession(role=role)
-        self.engine.sessions.add_role(role)
-        self.engine.sessions.add_session(session)
+        await self.engine.sessions.add_role(role)
+        await self.engine.sessions.add_session(session)
 
         # Re-crawl known endpoints with this auth role
         ep_count = len(self.engine.discovered_endpoints)
@@ -101,14 +101,14 @@ class AuthCrawlModule(BaseModule):
                 auth_role=role_name,
                 priority=7,
             )
-            await self.engine.rate_limiter.wait()
+            await self.engine.rate_limiter.wait(ep.url)
             response = await self.engine.execute(request)
             self.requests_made += 1
 
             if response.is_success:
                 # Check for new content not seen unauthenticated
-                if not self.engine.dedup.is_duplicate_content(response.content_hash):
-                    self.engine.dedup.mark_seen_content(response.content_hash)
+                if not await self.engine.dedup.is_duplicate_content(response.content_hash):
+                    await self.engine.dedup.mark_seen_content(response.content_hash)
                     auth_endpoint = Endpoint(
                         url=ep.url,
                         method=ep.method,
@@ -140,7 +140,7 @@ class AuthCrawlModule(BaseModule):
                 auth_role=role_name,
                 priority=6,
             )
-            await self.engine.rate_limiter.wait()
+            await self.engine.rate_limiter.wait(url)
             response = await self.engine.execute(request)
             self.requests_made += 1
             if response.is_success:

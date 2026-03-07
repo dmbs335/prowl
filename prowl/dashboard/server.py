@@ -110,8 +110,59 @@ def create_app(
         role = body.get("role", "default")
 
         if cookies:
-            engine.sessions.update_session_cookies(role, cookies)
+            await engine.sessions.update_session_cookies(role, cookies)
         return {"status": "ok", "cookies_injected": len(cookies)}
+
+    # --- Transaction viewer API ---
+
+    @app.get("/api/transactions")
+    async def get_transactions(url: str = "", limit: int = 5) -> dict:
+        """Return recent transactions for a given URL."""
+        if not url:
+            return {"transactions": []}
+        try:
+            txns = await engine.transaction_store.query(
+                url_pattern=url, limit=limit
+            )
+            result = []
+            for t in txns:
+                result.append({
+                    "id": t.id,
+                    "timestamp": t.timestamp,
+                    "request_method": t.method,
+                    "request_url": t.url,
+                    "request_headers": t.request_headers or {},
+                    "request_body": (t.request_body or "")[:50000],
+                    "response_status": t.status_code or 0,
+                    "response_headers": t.response_headers or {},
+                    "response_body": (t.response_body or "")[:50000],
+                    "response_content_type": t.content_type or "",
+                    "source_module": t.source_module or "",
+                })
+            return {"transactions": result}
+        except Exception as e:
+            logger.debug("Transaction query error: %s", e)
+            return {"transactions": []}
+
+    @app.post("/api/queue/submit")
+    async def submit_to_queue(body: dict) -> dict:
+        """Submit a URL to the crawl queue from the dashboard."""
+        url = body.get("url", "")
+        method = body.get("method", "GET")
+        priority = body.get("priority", 20)
+        if not url:
+            return JSONResponse(status_code=400, content={"error": "url required"})
+        try:
+            from prowl.models.target import CrawlRequest
+            req = CrawlRequest(
+                url=url, method=method, priority=priority,
+                source_module="dashboard",
+            )
+            await engine.submit(req)
+            return {"queued": True}
+        except Exception as e:
+            logger.debug("Queue submit error: %s", e)
+            return {"queued": False, "error": str(e)}
 
     @app.get("/api/logs")
     async def get_logs(limit: int = 50) -> list:
