@@ -147,17 +147,24 @@ async def inject_session(body: SessionInjectRequest) -> OperationResponse:
         injected.append(f"{len(body.cookies)} cookies")
 
     if body.headers:
-        for k, v in body.headers.items():
-            await engine.sessions.update_session_cookies(body.role, {})
-            # Headers go through the session pool's header mechanism
+        # Update role headers via session pool
+        session = await engine.sessions.get_session(body.role)
+        if session:
+            session.role.headers.update(body.headers)
         injected.append(f"{len(body.headers)} headers")
 
     if body.token:
-        # Inject bearer token as Authorization header
-        await engine.sessions.update_session_cookies(
-            body.role, {}
-        )
+        session = await engine.sessions.get_session(body.role)
+        if session:
+            session.role.token = body.token
         injected.append("bearer token")
+
+    # Auto-resume if engine is paused
+    if hasattr(engine, '_state'):
+        from prowl.core.engine import EngineState
+        if engine._state == EngineState.PAUSED:
+            engine.resume()
+            injected.append("auto-resumed")
 
     return OperationResponse(
         status="ok",

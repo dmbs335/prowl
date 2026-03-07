@@ -98,15 +98,19 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
 
 // ── Results Operations Tab ───────────────────────────────────
 function ResultsOpsTab() {
-  const { stats, endpointClusters, fetchEndpointClusters, adjustStrategy } = useCrawlStore();
+  const { stats, endpointClusters, fetchEndpointClusters, adjustStrategy, fetchScope } = useCrawlStore();
   const [focusPattern, setFocusPattern] = useState("");
   const [focusBoost, setFocusBoost] = useState(10);
   const [excludePattern, setExcludePattern] = useState("");
   const [excludeResult, setExcludeResult] = useState("");
+  const [scopeInfo, setScopeInfo] = useState<{ target_host: string; include_patterns: string[]; exclude_patterns: string[] } | null>(null);
+  const [addInclude, setAddInclude] = useState("");
+  const [scopeMsg, setScopeMsg] = useState("");
 
   useEffect(() => {
     fetchEndpointClusters();
-  }, [fetchEndpointClusters]);
+    fetchScope().then(setScopeInfo);
+  }, [fetchEndpointClusters, fetchScope]);
 
   const overSampled = endpointClusters.filter((c) => c.count > 20);
 
@@ -164,12 +168,12 @@ function ResultsOpsTab() {
                       {c.param_names.length > 0 ? c.param_names.slice(0, 4).join(", ") : "-"}
                     </td>
                     <td style={{ padding: "4px 8px", textAlign: "right", fontSize: 11 }}>
-                      {c.coverage_alpha.toFixed(0)}/{c.coverage_beta.toFixed(0)}
+                      {((c.coverage_alpha / (c.coverage_alpha + c.coverage_beta)) * 100).toFixed(0)}%
                     </td>
                     <td style={{ padding: "4px 8px", textAlign: "right" }}>
                       <button
                         style={{ ...btnSecondary, padding: "2px 8px", fontSize: 10 }}
-                        onClick={() => adjustStrategy({}, [c.template], 10)}
+                        onClick={() => adjustStrategy({}, [c.template], focusBoost)}
                       >
                         Boost
                       </button>
@@ -222,6 +226,64 @@ function ResultsOpsTab() {
         </div>
       </div>
 
+      {/* Current Scope */}
+      <SectionTitle>Current Scope</SectionTitle>
+      <div style={cardStyle}>
+        {scopeInfo ? (
+          <div>
+            <div style={{ marginBottom: 8 }}>
+              <span style={labelStyle}>Target: </span>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--accent-blue)", fontFamily: "monospace" }}>{scopeInfo.target_host}</span>
+            </div>
+            {scopeInfo.include_patterns.length > 0 && (
+              <div style={{ marginBottom: 6 }}>
+                <div style={labelStyle}>Include Patterns ({scopeInfo.include_patterns.length})</div>
+                {scopeInfo.include_patterns.map((p, i) => (
+                  <div key={i} style={{ fontSize: 11, fontFamily: "monospace", color: "var(--accent-green)", padding: "1px 0" }}>{p}</div>
+                ))}
+              </div>
+            )}
+            {scopeInfo.exclude_patterns.length > 0 && (
+              <div style={{ marginBottom: 6 }}>
+                <div style={labelStyle}>Exclude Patterns ({scopeInfo.exclude_patterns.length})</div>
+                {scopeInfo.exclude_patterns.map((p, i) => (
+                  <div key={i} style={{ fontSize: 11, fontFamily: "monospace", color: "var(--accent-red)", padding: "1px 0" }}>{p}</div>
+                ))}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 10, alignItems: "flex-end", marginTop: 8 }}>
+              <div style={{ flex: 1 }}>
+                <div style={labelStyle}>Add Include Pattern</div>
+                <input style={inputStyle} placeholder=".*\.example\.com.*" value={addInclude} onChange={(e) => setAddInclude(e.target.value)} />
+              </div>
+              <button
+                style={btnPrimary}
+                onClick={async () => {
+                  if (!addInclude) return;
+                  try {
+                    const r = await fetch("/api/v1/control/scope/update", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ add_include_patterns: [addInclude] }),
+                    });
+                    if (r.ok) {
+                      setScopeMsg(`Added include: ${addInclude}`);
+                      setAddInclude("");
+                      fetchScope().then(setScopeInfo);
+                    } else setScopeMsg("Failed to update scope");
+                  } catch { setScopeMsg("Network error"); }
+                }}
+              >
+                Add
+              </button>
+            </div>
+            {scopeMsg && <div style={{ marginTop: 6, fontSize: 12, color: "var(--accent-green)" }}>{scopeMsg}</div>}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>Loading scope... (available during live crawl)</div>
+        )}
+      </div>
+
       {/* Exclude from Scope section */}
       <SectionTitle>Exclude from Scope</SectionTitle>
       <div style={cardStyle}>
@@ -240,13 +302,15 @@ function ResultsOpsTab() {
             onClick={async () => {
               if (!excludePattern) return;
               try {
-                const r = await fetch("/api/v1/crawl/scope", {
-                  method: "PUT",
+                const r = await fetch("/api/v1/control/scope/update", {
+                  method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ add_exclude_patterns: [excludePattern] }),
                 });
-                if (r.ok) setExcludeResult(`Excluded: ${excludePattern}`);
-                else setExcludeResult("Failed to update scope");
+                if (r.ok) {
+                  setExcludeResult(`Excluded: ${excludePattern}`);
+                  fetchScope().then(setScopeInfo);
+                } else setExcludeResult("Failed to update scope");
               } catch {
                 setExcludeResult("Network error");
               }
@@ -265,16 +329,30 @@ function ResultsOpsTab() {
 
 // ── Auth Tab ─────────────────────────────────────────────────
 function AuthTab() {
-  const { authRoles, fetchAuthRoles, performLogin } = useCrawlStore();
+  const { authRoles, fetchAuthRoles, performLogin, interventions, fetchPendingInterventions, resolveInterventionApi, approvals, fetchApprovals, approveItem, approveAll, injectSession } = useCrawlStore();
   const [loginUrl, setLoginUrl] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("");
   const [loginResult, setLoginResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [actionMsg, setActionMsg] = useState("");
+  const [cookieText, setCookieText] = useState("");
+  const [cookieRole, setCookieRole] = useState("");
+  const [cookieResult, setCookieResult] = useState("");
+
+  const [resolveData, setResolveData] = useState<Record<string, string>>({});
 
   useEffect(() => {
     fetchAuthRoles();
-  }, [fetchAuthRoles]);
+    fetchPendingInterventions();
+    fetchApprovals();
+  }, [fetchAuthRoles, fetchPendingInterventions, fetchApprovals]);
+
+  // Auto-refresh interventions and approvals every 5s
+  useEffect(() => {
+    const interval = setInterval(() => { fetchPendingInterventions(); fetchApprovals(); }, 5000);
+    return () => clearInterval(interval);
+  }, [fetchPendingInterventions, fetchApprovals]);
 
   async function handleLogin() {
     if (!loginUrl || !username || !password) return;
@@ -286,22 +364,26 @@ function AuthTab() {
 
   async function handleReauth(roleName: string) {
     try {
-      await fetch(`/api/v1/orchestration/auth/reauth`, {
+      const r = await fetch(`/api/v1/orchestration/auth/reauth`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role: roleName }),
       });
+      if (r.ok) setActionMsg(`Re-authenticated: ${roleName}`);
+      else setActionMsg(`Reauth failed: ${r.status}`);
       fetchAuthRoles();
-    } catch { /* ignore */ }
+    } catch { setActionMsg("Reauth: network error"); }
   }
 
   async function handleRemoveRole(roleName: string) {
     try {
-      await fetch(`/api/v1/orchestration/auth/roles/${encodeURIComponent(roleName)}`, {
+      const r = await fetch(`/api/v1/orchestration/auth/roles/${encodeURIComponent(roleName)}`, {
         method: "DELETE",
       });
+      if (r.ok) setActionMsg(`Removed: ${roleName}`);
+      else setActionMsg(`Remove failed: ${r.status}`);
       fetchAuthRoles();
-    } catch { /* ignore */ }
+    } catch { setActionMsg("Remove: network error"); }
   }
 
   return (
@@ -384,6 +466,149 @@ function AuthTab() {
           </div>
         )}
       </div>
+
+      {actionMsg && (
+        <div style={{ marginTop: 8, padding: "6px 10px", fontSize: 12, color: "var(--accent-green)", background: "var(--bg-tertiary)", borderRadius: 4 }}>
+          {actionMsg}
+        </div>
+      )}
+
+      {/* Unsafe Method Approvals */}
+      <SectionTitle>Pending Approvals ({approvals.filter((a) => a.state === "pending").length})</SectionTitle>
+      <div style={cardStyle}>
+        {approvals.filter((a) => a.state === "pending").length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>No pending approvals.</div>
+        ) : (
+          <>
+            <div style={{ marginBottom: 8 }}>
+              <button style={btnPrimary} onClick={() => approveAll()}>Approve All ({approvals.filter((a) => a.state === "pending").length})</button>
+            </div>
+            {approvals.filter((a) => a.state === "pending").map((a) => (
+              <div key={a.id} style={{ padding: "6px 0", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <Badge text={a.request.method} color={a.request.method === "POST" ? "#ef4444" : "#f97316"} />
+                  <span style={{ fontSize: 11, fontFamily: "monospace", marginLeft: 6, color: "var(--text-secondary)" }}>{a.request.url}</span>
+                  <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: 6 }}>({a.request.source_module})</span>
+                </div>
+                <button style={{ ...btnPrimary, padding: "2px 10px", fontSize: 11 }} onClick={() => approveItem(a.id)}>Approve</button>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      {/* Session Cookie Injection */}
+      <SectionTitle>Inject Session Cookies</SectionTitle>
+      <div style={cardStyle}>
+        <div style={{ marginBottom: 10 }}>
+          <div style={labelStyle}>Cookies (name=value, one per line or semicolon-separated)</div>
+          <textarea
+            style={{ ...inputStyle, minHeight: 60, resize: "vertical", fontFamily: "monospace", fontSize: 12 }}
+            placeholder={"PHPSESSID=abc123\nsession_token=xyz789\n\nor: PHPSESSID=abc123; session_token=xyz789"}
+            value={cookieText}
+            onChange={(e) => setCookieText(e.target.value)}
+          />
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div style={{ minWidth: 120 }}>
+            <div style={labelStyle}>Role</div>
+            <select style={{ ...inputStyle, cursor: "pointer" }} value={cookieRole} onChange={(e) => setCookieRole(e.target.value)}>
+              <option value="">default</option>
+              {authRoles.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+            </select>
+          </div>
+          <button
+            style={btnPrimary}
+            onClick={async () => {
+              const cookies: Record<string, string> = {};
+              const raw = cookieText.replace(/\n/g, ";");
+              for (const part of raw.split(";")) {
+                const trimmed = part.trim();
+                if (!trimmed) continue;
+                const eq = trimmed.indexOf("=");
+                if (eq > 0) {
+                  cookies[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+                }
+              }
+              if (Object.keys(cookies).length === 0) return;
+              const res = await injectSession(cookies, cookieRole || undefined);
+              if (res) {
+                setCookieResult(`Injected ${res.cookies_injected} cookies${res.resumed ? " (engine resumed)" : ""}`);
+                setCookieText("");
+              } else {
+                setCookieResult("Injection failed");
+              }
+            }}
+          >
+            Inject & Resume
+          </button>
+        </div>
+        {cookieResult && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--accent-green)", background: "var(--bg-tertiary)", padding: 6, borderRadius: 4 }}>
+            {cookieResult}
+          </div>
+        )}
+      </div>
+
+      {/* Pending Interventions */}
+      <SectionTitle>Pending Interventions ({interventions.filter((i) => i.state === "pending").length})</SectionTitle>
+      <div style={cardStyle}>
+        {interventions.filter((i) => i.state === "pending").length === 0 ? (
+          <div style={{ fontSize: 12, color: "var(--text-muted)" }}>No pending interventions.</div>
+        ) : (
+          interventions.filter((i) => i.state === "pending").map((iv) => (
+            <div key={iv.id} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)" }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                <Badge text={iv.kind.toUpperCase()} color={iv.kind === "login" ? "#ef4444" : iv.kind === "captcha" ? "#f97316" : "#8b5cf6"} />
+                <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "monospace" }}>{iv.module}</span>
+              </div>
+              <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>{iv.message}</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                {iv.kind === "login" && (
+                  <>
+                    <div>
+                      <div style={labelStyle}>Username</div>
+                      <input style={inputStyle} placeholder="admin" value={resolveData[`${iv.id}_user`] || ""} onChange={(e) => setResolveData((d) => ({ ...d, [`${iv.id}_user`]: e.target.value }))} />
+                    </div>
+                    <div>
+                      <div style={labelStyle}>Password</div>
+                      <input style={inputStyle} type="password" value={resolveData[`${iv.id}_pass`] || ""} onChange={(e) => setResolveData((d) => ({ ...d, [`${iv.id}_pass`]: e.target.value }))} />
+                    </div>
+                  </>
+                )}
+                {iv.kind === "captcha" && (
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <div style={labelStyle}>Token</div>
+                    <input style={inputStyle} placeholder="Captcha token" value={resolveData[`${iv.id}_token`] || ""} onChange={(e) => setResolveData((d) => ({ ...d, [`${iv.id}_token`]: e.target.value }))} />
+                  </div>
+                )}
+                {(iv.kind === "2fa" || iv.kind === "manual") && (
+                  <div style={{ gridColumn: "1 / -1" }}>
+                    <div style={labelStyle}>Token / Data</div>
+                    <input style={inputStyle} placeholder="OTP or manual data" value={resolveData[`${iv.id}_token`] || ""} onChange={(e) => setResolveData((d) => ({ ...d, [`${iv.id}_token`]: e.target.value }))} />
+                  </div>
+                )}
+              </div>
+              <button
+                style={btnPrimary}
+                onClick={async () => {
+                  const payload: Record<string, unknown> = {};
+                  if (iv.kind === "login") {
+                    payload.credentials = { username: resolveData[`${iv.id}_user`] || "", password: resolveData[`${iv.id}_pass`] || "" };
+                  } else {
+                    payload.token = resolveData[`${iv.id}_token`] || "";
+                  }
+                  const ok = await resolveInterventionApi(iv.id, payload);
+                  setActionMsg(ok ? `Resolved: ${iv.kind}` : "Resolve failed");
+                  fetchPendingInterventions();
+                }}
+              >
+                Resolve
+              </button>
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 }
@@ -461,7 +686,7 @@ function IntelligenceTab() {
                 <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--accent-blue)" }}>{t.template}</span>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                    hit: {t.hit_rate.toFixed(2)} ({t.alpha.toFixed(0)}/{t.beta.toFixed(0)})
+                    hit: {(t.hit_rate * 100).toFixed(0)}%
                   </span>
                 </div>
               </div>
@@ -480,7 +705,7 @@ function IntelligenceTab() {
                 <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--accent-orange)" }}>{t.template}</span>
                 <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                   <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                    ({t.alpha.toFixed(0)}/{t.beta.toFixed(0)})
+                    {(t.hit_rate * 100).toFixed(0)}%
                   </span>
                   <button
                     style={{ ...btnSecondary, padding: "2px 8px", fontSize: 10 }}
@@ -546,7 +771,7 @@ function IntelligenceTab() {
                 {expandedCluster === c.template && (
                   <div style={{ padding: "4px 0 8px 12px" }}>
                     <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
-                      Coverage: {c.coverage_alpha.toFixed(0)}/{c.coverage_beta.toFixed(0)} |
+                      Coverage: {((c.coverage_alpha / (c.coverage_alpha + c.coverage_beta)) * 100).toFixed(0)}% |
                       Params: {c.param_names.join(", ") || "none"}
                     </div>
                     {c.sample_urls.map((u, j) => (
@@ -565,7 +790,7 @@ function IntelligenceTab() {
 
 // ── Hypothesis Tab ───────────────────────────────────────────
 function HypothesisTab() {
-  const { testHypothesis, authRoles, fetchAuthRoles } = useCrawlStore();
+  const { testHypothesis, authRoles, fetchAuthRoles, injectUrls } = useCrawlStore();
   const [hypothesis, setHypothesis] = useState("");
   const [urls, setUrls] = useState("");
   const [methods, setMethods] = useState<Record<string, boolean>>({ GET: true, POST: false, PUT: false, DELETE: false, PATCH: false });
@@ -573,7 +798,10 @@ function HypothesisTab() {
   const [authRole, setAuthRole] = useState("");
   const [result, setResult] = useState("");
   const [history, setHistory] = useState<Array<{ hypothesis: string; result: string; ts: number }>>([]);
-
+  const [injectText, setInjectText] = useState("");
+  const [injectPriority, setInjectPriority] = useState(15);
+  const [injectRole, setInjectRole] = useState("");
+  const [injectResult, setInjectResult] = useState("");
   useEffect(() => {
     fetchAuthRoles();
   }, [fetchAuthRoles]);
@@ -589,6 +817,54 @@ function HypothesisTab() {
 
   return (
     <div>
+      {/* URL Injection */}
+      <SectionTitle>Inject URLs</SectionTitle>
+      <div style={cardStyle}>
+        <div style={{ marginBottom: 10 }}>
+          <div style={labelStyle}>URLs (one per line)</div>
+          <textarea
+            style={{ ...inputStyle, minHeight: 60, resize: "vertical", fontFamily: "monospace", fontSize: 12 }}
+            placeholder={"https://example.com/admin\nhttps://example.com/api/v2/users"}
+            value={injectText}
+            onChange={(e) => setInjectText(e.target.value)}
+          />
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div style={{ width: 80 }}>
+            <div style={labelStyle}>Priority</div>
+            <input type="number" min={1} max={100} style={inputStyle} value={injectPriority} onChange={(e) => setInjectPriority(Number(e.target.value))} />
+          </div>
+          <div style={{ minWidth: 120 }}>
+            <div style={labelStyle}>Auth Role</div>
+            <select style={{ ...inputStyle, cursor: "pointer" }} value={injectRole} onChange={(e) => setInjectRole(e.target.value)}>
+              <option value="">No auth</option>
+              {authRoles.map((r) => <option key={r.name} value={r.name}>{r.name}</option>)}
+            </select>
+          </div>
+          <button
+            style={btnPrimary}
+            onClick={async () => {
+              const parsed = injectText.split("\n").map((u) => u.trim()).filter(Boolean);
+              if (parsed.length === 0) return;
+              const res = await injectUrls(parsed, injectPriority, injectRole || undefined);
+              if (res) {
+                setInjectResult(`Accepted: ${res.accepted}, Out-of-scope: ${res.rejected_out_of_scope}, Duplicate: ${res.rejected_duplicate}`);
+                setInjectText("");
+              } else {
+                setInjectResult("Injection failed");
+              }
+            }}
+          >
+            Inject
+          </button>
+        </div>
+        {injectResult && (
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--accent-green)", background: "var(--bg-tertiary)", padding: 6, borderRadius: 4 }}>
+            {injectResult}
+          </div>
+        )}
+      </div>
+
       <SectionTitle>Test Hypothesis</SectionTitle>
       <div style={cardStyle}>
         <div style={{ marginBottom: 10 }}>
@@ -1135,15 +1411,15 @@ function PlaybookTab() {
 
 // ── Main CommandCenter Component ─────────────────────────────
 export function CommandCenter() {
-  const [activeTab, setActiveTab] = useState<SubTab>("results");
+  const [activeTab, setActiveTab] = useState<SubTab>("intelligence");
 
   const tabs: { key: SubTab; label: string }[] = [
-    { key: "results", label: "Results" },
-    { key: "queue", label: "Queue" },
-    { key: "playbook", label: "Playbook" },
-    { key: "auth", label: "Auth" },
     { key: "intelligence", label: "Intelligence" },
+    { key: "queue", label: "Queue" },
     { key: "hypothesis", label: "Hypothesis" },
+    { key: "auth", label: "Auth" },
+    { key: "results", label: "Scope" },
+    { key: "playbook", label: "Playbook" },
   ];
 
   return (

@@ -65,12 +65,24 @@ class SessionPool:
     async def update_session_cookies(
         self, role_name: str, cookies: dict[str, str]
     ) -> None:
-        """Update cookies for the most recent session of a role."""
+        """Update cookies for the most recent session of a role.
+
+        If no session exists for the role, creates one automatically.
+        """
         async with self._lock:
-            sessions = self._sessions.get(role_name, [])
+            if role_name not in self._sessions:
+                self._sessions[role_name] = []
+            sessions = self._sessions[role_name]
             valid = [s for s in sessions if s.is_valid]
             if valid:
                 valid[-1].session_cookies.update(cookies)
+            else:
+                # Create a new session for this role
+                role = self._roles.get(role_name, AuthRole(name=role_name))
+                self._roles[role_name] = role
+                session = AuthSession(role=role, session_cookies=dict(cookies))
+                sessions.append(session)
+                logger.info("Created new session for role '%s' with %d cookies", role_name, len(cookies))
 
     @property
     def role_names(self) -> list[str]:

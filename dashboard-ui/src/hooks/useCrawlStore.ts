@@ -20,6 +20,7 @@ import type {
   RiskSummary,
   RoleStatus,
   TechFingerprint,
+  Transaction,
 } from "../types";
 import {
   saveSession,
@@ -44,6 +45,9 @@ interface CrawlStore {
   // Interventions
   interventions: Intervention[];
 
+  // Approvals (unsafe method requests)
+  approvals: Array<{ id: string; kind: string; state: string; request: { url: string; method: string; source_module: string } }>;
+
   // WebSocket connection
   connected: boolean;
   _liveMode: boolean;
@@ -66,8 +70,14 @@ interface CrawlStore {
   autoMergeRules: AutoMergeRules | null;
 
   // UI state
-  activeView: "pipeline" | "sitemap" | "endpoints" | "graph" | "attack-surface" | "command-center";
+  activeView: "overview" | "pipeline" | "sitemap" | "endpoints" | "graph" | "attack-surface" | "command-center";
   selectedNode: string | null;
+  statsExpanded: boolean;
+  logsExpanded: boolean;
+
+  // Transaction viewer
+  selectedTransactions: Transaction[];
+  transactionsLoading: boolean;
 
   // Stats & logs
   stats: CrawlStats;
@@ -92,7 +102,11 @@ interface CrawlStore {
   resolveIntervention: (id: string) => void;
   updateStats: (stats: Partial<CrawlStats>) => void;
   addLog: (entry: LogEntry) => void;
-  setActiveView: (view: "pipeline" | "sitemap" | "endpoints" | "graph" | "attack-surface" | "command-center") => void;
+  setActiveView: (view: "overview" | "pipeline" | "sitemap" | "endpoints" | "graph" | "attack-surface" | "command-center") => void;
+  toggleStats: () => void;
+  toggleLogs: () => void;
+  fetchTransactions: (url: string) => Promise<void>;
+  submitToQueue: (url: string, method: string) => Promise<void>;
 
   // Orchestration actions
   fetchDecisionContext: () => Promise<void>;
@@ -115,6 +129,14 @@ interface CrawlStore {
   removeAutoMergeRule: (pattern: string) => Promise<string>;
   adjustStrategy: (moduleWeights: Record<string, number>, focusPatterns: string[], focusBoost?: number) => Promise<void>;
   testHypothesis: (hypothesis: string, testUrls: string[], methods: string[], priority?: number, authRole?: string) => Promise<string>;
+  fetchPendingInterventions: () => Promise<void>;
+  resolveInterventionApi: (id: string, data: Record<string, unknown>) => Promise<boolean>;
+  fetchApprovals: () => Promise<void>;
+  approveItem: (id: string) => Promise<boolean>;
+  approveAll: () => Promise<boolean>;
+  fetchScope: () => Promise<{ target_host: string; include_patterns: string[]; exclude_patterns: string[] } | null>;
+  injectUrls: (urls: string[], priority: number, authRole?: string) => Promise<{ accepted: number; rejected_out_of_scope: number; rejected_duplicate: number; rejected_depth: number } | null>;
+  injectSession: (cookies: Record<string, string>, role?: string) => Promise<{ status: string; cookies_injected: number; resumed: boolean } | null>;
   setSelectedNode: (nodeId: string | null) => void;
   setPhase: (phase: number, name: string) => void;
   initState: (
@@ -175,10 +197,15 @@ export const useCrawlStore = create<CrawlStore>((set) => ({
   queueStats: null,
   autoMergeRules: null,
   interventions: [],
+  approvals: [],
   connected: false,
   _liveMode: false,
-  activeView: "pipeline",
+  activeView: "overview",
   selectedNode: null,
+  statsExpanded: false,
+  logsExpanded: false,
+  selectedTransactions: [],
+  transactionsLoading: false,
   startTime: Date.now(),
   stats: {
     total_endpoints: 0,
@@ -246,6 +273,30 @@ export const useCrawlStore = create<CrawlStore>((set) => ({
 
   setActiveView: (view) => set({ activeView: view }),
   setSelectedNode: (nodeId) => set({ selectedNode: nodeId }),
+  toggleStats: () => set((s) => ({ statsExpanded: !s.statsExpanded })),
+  toggleLogs: () => set((s) => ({ logsExpanded: !s.logsExpanded })),
+
+  fetchTransactions: async (url) => {
+    set({ transactionsLoading: true, selectedTransactions: [] });
+    try {
+      const r = await fetch(`/api/transactions?url=${encodeURIComponent(url)}&limit=5`);
+      if (r.ok) {
+        const data = await r.json();
+        set({ selectedTransactions: data.transactions || [] });
+      }
+    } catch { /* ignore */ }
+    set({ transactionsLoading: false });
+  },
+
+  submitToQueue: async (url, method) => {
+    try {
+      await fetch("/api/queue/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, method, priority: 20 }),
+      });
+    } catch { /* ignore */ }
+  },
 
   setPhase: (phase, name) =>
     set({ currentPhase: phase, phaseName: name }),
@@ -580,6 +631,86 @@ export const useCrawlStore = create<CrawlStore>((set) => ({
       }
     } catch { /* ignore */ }
     return "";
+  },
+
+  fetchPendingInterventions: async () => {
+    try {
+      const r = await fetch("/api/interventions");
+      if (r.ok) {
+        const data = await r.json();
+        const items = Array.isArray(data) ? data : data.interventions || [];
+        set({ interventions: items.filter((i: { state: string }) => i.state === "pending") });
+      }
+    } catch { /* ignore */ }
+  },
+
+  resolveInterventionApi: async (id, data) => {
+    try {
+      const r = await fetch(`/api/interventions/${encodeURIComponent(id)}/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      return r.ok;
+    } catch { return false; }
+  },
+
+  fetchApprovals: async () => {
+    try {
+      const r = await fetch("/api/approvals");
+      if (r.ok) {
+        const data = await r.json();
+        set({ approvals: Array.isArray(data) ? data : [] });
+      }
+    } catch { /* ignore */ }
+  },
+
+  approveItem: async (id) => {
+    try {
+      const r = await fetch(`/api/approvals/${encodeURIComponent(id)}/approve`, { method: "POST" });
+      if (r.ok) { useCrawlStore.getState().fetchApprovals(); return true; }
+    } catch { /* ignore */ }
+    return false;
+  },
+
+  approveAll: async () => {
+    try {
+      const r = await fetch("/api/approvals/approve-all", { method: "POST" });
+      if (r.ok) { useCrawlStore.getState().fetchApprovals(); return true; }
+    } catch { /* ignore */ }
+    return false;
+  },
+
+  fetchScope: async () => {
+    try {
+      const r = await fetch("/api/v1/scope");
+      if (r.ok) return await r.json();
+    } catch { /* ignore */ }
+    return null;
+  },
+
+  injectUrls: async (urls, priority, authRole) => {
+    try {
+      const r = await fetch("/api/v1/inject/urls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ urls, priority, auth_role: authRole || null }),
+      });
+      if (r.ok) return await r.json();
+    } catch { /* ignore */ }
+    return null;
+  },
+
+  injectSession: async (cookies, role) => {
+    try {
+      const r = await fetch("/api/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cookies, role: role || "default", resume: true }),
+      });
+      if (r.ok) return await r.json();
+    } catch { /* ignore */ }
+    return null;
   },
 
   // ── Session management ────────────────────────────────────────────────────

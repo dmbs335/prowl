@@ -108,10 +108,20 @@ def create_app(
         cookies = body.get("cookies", {})
         headers = body.get("headers", {})
         role = body.get("role", "default")
+        auto_resume = body.get("resume", True)
 
         if cookies:
             await engine.sessions.update_session_cookies(role, cookies)
-        return {"status": "ok", "cookies_injected": len(cookies)}
+            logger.info("Injected %d cookies for role '%s'", len(cookies), role)
+
+        # Auto-resume if engine is paused
+        if auto_resume and hasattr(engine, '_state'):
+            from prowl.core.engine import EngineState
+            if engine._state == EngineState.PAUSED:
+                engine.resume()
+                logger.info("Engine auto-resumed after session injection")
+
+        return {"status": "ok", "cookies_injected": len(cookies), "resumed": auto_resume}
 
     # --- Transaction viewer API ---
 
@@ -242,7 +252,7 @@ def create_app(
                 try:
                     data = await ws.receive_text()
                     # Handle client messages if needed
-                except WebSocketDisconnect:
+                except (WebSocketDisconnect, asyncio.CancelledError):
                     break
         finally:
             bridge.remove_client(ws)

@@ -300,9 +300,10 @@ class CrawlEngine:
 
         # --- End guardrails -----------------------------------------------
 
-        # Apply auth headers if role specified
-        if request.auth_role:
-            auth_headers = await self.sessions.get_headers_for_role(request.auth_role)
+        # Apply auth headers: use request's role, or fall back to "default" role
+        role = request.auth_role or "default"
+        auth_headers = await self.sessions.get_headers_for_role(role)
+        if auth_headers:
             request.headers.update(auth_headers)
 
         await self.signals.emit(Signal.REQUEST_STARTED, request=request)

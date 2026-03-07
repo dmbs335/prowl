@@ -51,7 +51,7 @@ class DirBruteforceModule(BaseModule):
         # HTTP -> HTTPS canonicalization
         parsed = urlparse(target)
         if parsed.scheme == "http":
-            probe = CrawlRequest(url=target, method="HEAD", source_module=self.name)
+            probe = CrawlRequest(url=target, method="head", source_module=self.name)
             try:
                 probe_resp = await self.engine.execute(probe)
                 if probe_resp.url_final and urlparse(probe_resp.url_final).scheme == "https":
